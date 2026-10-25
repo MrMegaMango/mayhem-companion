@@ -22,6 +22,12 @@ def session(champion=897, **own_fields):
         "benchChampions": [{"championId": 22}], "gameId": 123456789}
 
 
+def gameflow(mode="ARAM", queue_id=450, phase="ChampSelect"):
+    return {"phase": phase, "gameData": {"queue": {"id": queue_id, "gameMode": mode},
+            "gameId": 123456789, "password": "PRIVATE-PASSWORD",
+            "teamOne": [{"puuid": "PRIVATE-PUUID"}]}}
+
+
 class SessionTests(unittest.TestCase):
     def test_matches_own_cell_and_returns_only_champion_and_spell_context(self):
         result = client._session_state(session())
@@ -116,12 +122,15 @@ class ReaderTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.reader = client.ClientReader()
 
-    def test_only_two_read_only_endpoints_in_champ_select(self):
-        self.http.side_effect = ["ChampSelect", session()]
+    def test_only_three_read_only_endpoints_in_champ_select(self):
+        self.http.side_effect = ["ChampSelect", gameflow(), session()]
         result = self.reader.poll()
         self.assertEqual(result["champion_id"], "897")
+        self.assertTrue(result["is_aram"])
+        self.assertEqual(result["game_mode"], "ARAM")
+        self.assertNotIn("PRIVATE", json.dumps(result))
         self.assertEqual([c.args[2] for c in self.http.call_args_list],
-                         [client._PHASE_PATH, client._SESSION_PATH])
+                         [client._PHASE_PATH, client._GAMEFLOW_PATH, client._SESSION_PATH])
         self.assertTrue(all(c.args[3] == 0.5 for c in self.http.call_args_list))
 
     def test_no_session_read_outside_champ_select(self):
@@ -131,8 +140,8 @@ class ReaderTests(unittest.TestCase):
         self.http.assert_called_once()
 
     def test_changes_trades_bench_swaps_and_empty_selection_replace_previous_data(self):
-        self.http.side_effect = ["ChampSelect", session(897), "ChampSelect", session(22),
-                                 "ChampSelect", session(0), "ChampSelect", session(1, spell1Id=7)]
+        self.http.side_effect = ["ChampSelect", gameflow(), session(897), "ChampSelect", gameflow(), session(22),
+                                 "ChampSelect", gameflow(), session(0), "ChampSelect", gameflow(), session(1, spell1Id=7)]
         results = [self.reader.poll() for _ in range(4)]
         self.assertEqual([s["champion_id"] for s in results], ["897", "22", None, "1"])
         self.assertEqual(results[-1]["summoner_spells"][0]["id"], "7")
@@ -142,7 +151,7 @@ class ReaderTests(unittest.TestCase):
     def test_client_restart_refreshes_credentials_without_rediscovering(self):
         self.lockfile.side_effect = [client._Credentials(54321, "old-token"),
                                     client._Credentials(54322, "new-token")]
-        self.http.side_effect = ["Lobby", "ChampSelect", session(22)]
+        self.http.side_effect = ["Lobby", "ChampSelect", gameflow(), session(22)]
         self.reader.poll()
         result = self.reader.poll()
         self.assertEqual(result["champion_id"], "22")
@@ -168,10 +177,56 @@ class ReaderTests(unittest.TestCase):
         self.assertNotIn("fixture-token", json.dumps(failed))
 
     def test_session_transition_404_still_clears_champion(self):
-        self.http.side_effect = ["ChampSelect", HTTPError("private", 404, "private", {}, None)]
+        self.http.side_effect = ["ChampSelect", gameflow(), HTTPError("private", 404, "private", {}, None)]
         result = self.reader.poll()
         self.assertEqual(result["status"], "champ_select")
         self.assertIsNone(result["champion_id"])
+
+    def test_active_game_phases_return_mode_without_champion_selection_read(self):
+        for phase in ("GameStart", "InProgress", "Reconnect"):
+            self.http.reset_mock()
+            self.http.side_effect = [phase, gameflow("KIWI", 2400, phase)]
+            result = self.reader.poll()
+            self.assertEqual(result["status"], "waiting")
+            self.assertEqual(result["phase"], phase)
+            self.assertTrue(result["is_aram"])
+            self.assertEqual(result["game_mode"], "KIWI")
+            self.assertEqual(self.http.call_count, 2)
+
+    def test_inactive_phase_reads_no_session_and_forgets_previous_mode(self):
+        self.http.side_effect = ["ChampSelect", gameflow(), session(), "EndOfGame", "None", "Lobby"]
+        self.assertTrue(self.reader.poll()["is_aram"])
+        for phase in ("EndOfGame", "None", "Lobby"):
+            result = self.reader.poll()
+            self.assertEqual(result["phase"], phase)
+            self.assertIsNone(result["is_aram"])
+            self.assertIsNone(result["game_mode"])
+        self.assertEqual(self.http.call_count, 6)
+
+    def test_metadata_failure_preserves_phase_and_champion_but_not_old_mode(self):
+        self.http.side_effect = ["ChampSelect", gameflow(), session(),
+                                 "ChampSelect", URLError("PRIVATE-TOKEN"), session(22)]
+        self.assertTrue(self.reader.poll()["is_aram"])
+        result = self.reader.poll()
+        self.assertEqual(result["phase"], "ChampSelect")
+        self.assertEqual(result["champion_id"], "22")
+        self.assertIsNone(result["is_aram"])
+        self.assertIsNone(result["game_mode"])
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_other_mode_still_returns_own_selection_without_marking_aram(self):
+        self.http.side_effect = ["ChampSelect", gameflow("CLASSIC", 420), session()]
+        result = self.reader.poll()
+        self.assertEqual(result["champion_id"], "897")
+        self.assertFalse(result["is_aram"])
+
+    def test_phase_transition_in_newer_gameflow_response_wins(self):
+        self.http.side_effect = ["ChampSelect", gameflow(phase="EndOfGame")]
+        result = self.reader.poll()
+        self.assertEqual(result["phase"], "EndOfGame")
+        self.assertEqual(result["status"], "waiting")
+        self.assertIsNone(result["is_aram"])
+        self.assertEqual(self.http.call_count, 2)
 
     def test_http_and_parse_errors_are_sanitized(self):
         for error, status in ((HTTPError("private", 401, "fixture-token", {}, None), "waiting"),
@@ -196,6 +251,47 @@ class ReaderTests(unittest.TestCase):
                 self.reader.poll(timeout)
         self.http.assert_not_called()
         self.discovery.assert_not_called()
+
+
+class GameflowContextTests(unittest.TestCase):
+    def test_mode_helper_accepts_only_verified_exact_modes(self):
+        for mode in ("ARAM", "aram", " KIWI "):
+            self.assertTrue(client.is_aram_mode(mode))
+        for mode in (None, {}, True, "CLASSIC", "ARAM_RANKED", "ARAM Mayhem", ""):
+            self.assertFalse(client.is_aram_mode(mode))
+
+    def test_official_aram_queue_fallback_includes_mayhem_and_clash(self):
+        for queue_id in (65, 67, 100, 450, 720, 2400):
+            context = client._gameflow_context(gameflow(None, queue_id))
+            self.assertTrue(context["is_aram"])
+            self.assertIsNone(context["game_mode"])
+
+    def test_custom_queue_requires_actual_mode(self):
+        for mode in ("ARAM", "KIWI"):
+            self.assertTrue(client._gameflow_context(gameflow(mode, 0))["is_aram"])
+        self.assertFalse(client._gameflow_context(gameflow("CLASSIC", 0))["is_aram"])
+        custom = gameflow(None, 0)
+        custom["gameData"]["queue"]["mapId"] = 12
+        self.assertIsNone(client._gameflow_context(custom)["is_aram"])
+
+    def test_custom_selected_map_mode_takes_priority_over_generic_queue(self):
+        custom = gameflow("CLASSIC", 0)
+        custom["map"] = {"id": 12, "gameMode": "ARAM"}
+        self.assertEqual(client._gameflow_context(custom), {"is_aram": True, "game_mode": "ARAM"})
+        self.assertTrue(client._gameflow_context({"map": {"gameMode": "KIWI"}})["is_aram"])
+
+    def test_known_other_mode_wins_over_conflicting_queue_id(self):
+        self.assertEqual(client._gameflow_context(gameflow("CLASSIC", 450)),
+                         {"is_aram": False, "game_mode": "CLASSIC"})
+
+    def test_unknown_and_malformed_metadata_is_not_assumed_aram(self):
+        for data in (None, [], {}, {"gameData": []}, {"gameData": {"queue": []}},
+                     gameflow("PRIVATE-MODE", 99999), gameflow(None, True),
+                     gameflow({}, 0)):
+            result = client._gameflow_context(data)
+            self.assertIsNone(result["is_aram"])
+            self.assertIsNone(result["game_mode"])
+            self.assertNotIn("PRIVATE", json.dumps(result))
 
 
 class LockfileAndTransportTests(unittest.TestCase):

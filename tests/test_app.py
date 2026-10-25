@@ -1,12 +1,17 @@
 """State regression tests use a fake view; no game interaction or desktop input."""
 import queue
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from mayhem.app import Companion
 
 
 class StateTests(unittest.TestCase):
+    def setUp(self):
+        style = patch("mayhem.app.set_window_style")
+        style.start()
+        self.addCleanup(style.stop)
+
     def make_view(self):
         app = object.__new__(Companion)
         app.catalog = {"champions": {"157": {"name": "Yasuo", "riotId": "Yasuo", "slug": "yasuo"}}}
@@ -19,6 +24,11 @@ class StateTests(unittest.TestCase):
         app.champion = "157"
         app.live_champion = "157"
         app.locked = False
+        app.hidden = True
+        app.auto_visible = app.browse_mode = False
+        app.visibility_override = None
+        app.hotkeys = Mock()
+        app.hotkeys.registered = [101, 102, 103]
         app.game_live = True
         app.game_status = "live"
         app.champ_select = app.champion_preview = False
@@ -47,6 +57,76 @@ class StateTests(unittest.TestCase):
         app.handle_game({"status": "live", "raw_champion": "game_character_displayname_Yasuo"})
         self.assertEqual(app.champion, "157")
         self.assertFalse(app.worker.provider.mock_calls)
+
+    def test_hidden_on_desktop_lobby_other_modes_and_unknown_mode(self):
+        app = self.make_view()
+        for game in ({"status": "waiting"},
+                     {"status": "waiting", "phase": "Lobby", "is_aram": True},
+                     {"status": "champ_select", "is_aram": False},
+                     {"status": "live", "is_aram": False},
+                     {"status": "live", "is_aram": None}):
+            app.update_visibility(game)
+            self.assertTrue(app.hidden)
+        app.root.deiconify.assert_not_called()
+
+    def test_shows_at_aram_select_stays_through_loading_and_hides_at_end(self):
+        app = self.make_view()
+        for game in ({"status": "champ_select", "phase": "ChampSelect", "is_aram": True},
+                     {"status": "waiting", "phase": "GameStart", "is_aram": True},
+                     {"status": "live", "phase": "InProgress", "is_aram": True},
+                     {"status": "waiting", "phase": "Reconnect", "is_aram": True}):
+            app.update_visibility(game)
+            self.assertFalse(app.hidden)
+        app.root.deiconify.assert_called_once()
+        app.update_visibility({"status": "waiting", "phase": "EndOfGame", "is_aram": False})
+        self.assertTrue(app.hidden)
+        app.root.withdraw.assert_called_once()
+
+    def test_manual_hide_survives_polls_and_resets_next_match(self):
+        app = self.make_view()
+        selected = {"status": "champ_select", "is_aram": True}
+        app.update_visibility(selected)
+        app.toggle_visible()
+        app.update_visibility(selected)
+        app.update_visibility({"status": "waiting", "phase": "GameStart", "is_aram": True})
+        app.update_visibility({"status": "live", "is_aram": True})
+        self.assertTrue(app.hidden)
+        app.update_visibility({"status": "waiting", "phase": "Lobby", "is_aram": False})
+        app.update_visibility(selected)
+        self.assertFalse(app.hidden)
+
+    def test_manual_open_outside_match_is_preserved_until_next_match_ends(self):
+        app = self.make_view()
+        app.toggle_visible()
+        app.update_visibility({"status": "waiting", "phase": "None", "is_aram": False})
+        self.assertFalse(app.hidden)
+        app.update_visibility({"status": "champ_select", "is_aram": True})
+        app.update_visibility({"status": "waiting", "phase": "Lobby", "is_aram": False})
+        self.assertTrue(app.hidden)
+
+    def test_metadata_failure_does_not_cancel_manual_hide_within_a_match(self):
+        app = self.make_view()
+        selection = {"status": "champ_select", "phase": "ChampSelect", "is_aram": True}
+        app.update_visibility(selection)
+        app.toggle_visible()
+        app.update_visibility({"status": "champ_select", "phase": "ChampSelect", "is_aram": None})
+        app.update_visibility({"status": "error", "phase": None, "is_aram": None})
+        app.update_visibility(selection)
+        self.assertTrue(app.hidden)
+        app.root.deiconify.assert_called_once()
+        # An authoritative idle phase, even without mode metadata, ends it.
+        app.update_visibility({"status": "waiting", "phase": "None", "is_aram": None})
+        app.update_visibility(selection)
+        self.assertFalse(app.hidden)
+
+    def test_explicit_browse_mode_remains_available_and_can_be_hidden(self):
+        app = self.make_view()
+        app.browse_mode = True
+        app.update_visibility({"status": "waiting", "is_aram": False})
+        self.assertFalse(app.hidden)
+        app.toggle_visible()
+        app.update_visibility({"status": "waiting", "is_aram": False})
+        self.assertTrue(app.hidden)
 
     def test_disconnected_game_clears_previous_champion_and_rates(self):
         app = self.make_view()

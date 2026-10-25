@@ -34,7 +34,7 @@ class SpellWorkerTests(unittest.TestCase):
         provider.summoner_spells_for.side_effect = ValueError("Unavailable")
         result = self.run_request(provider)
         self.assertIn(("spells_error", (9, "Unavailable")), result)
-        self.assertIn(("game", {"status": "waiting"}), result)
+        self.assertIn(("game", {"status": "waiting", "phase": None, "is_aram": None}), result)
 
     def test_focus_loss_retains_last_offers_and_marks_scan_paused(self):
         events, requests, stop = queue.Queue(), queue.Queue(), Mock()
@@ -42,7 +42,7 @@ class SpellWorkerTests(unittest.TestCase):
         provider = Mock()
         provider.load_catalog.return_value = {"augments": {}}
         with patch("mayhem.worker.StatsProvider", return_value=provider), \
-                patch("mayhem.worker.poll_active_player", return_value={"status": "live"}), \
+                patch("mayhem.worker.poll_active_player", return_value={"status": "live", "game_mode": "ARAM"}), \
                 patch("mayhem.worker.CaptureReader") as capture:
             capture.return_value.scan.return_value = {"status": "waiting", "message": "Focus League"}
             worker = Worker(events, requests, stop, ".")
@@ -62,7 +62,7 @@ class SpellWorkerTests(unittest.TestCase):
                 provider = Mock()
                 provider.load_catalog.return_value = {"augments": {}}
                 with patch("mayhem.worker.StatsProvider", return_value=provider), \
-                        patch("mayhem.worker.poll_active_player", return_value={"status": "live"}), \
+                        patch("mayhem.worker.poll_active_player", return_value={"status": "live", "game_mode": "ARAM"}), \
                         patch("mayhem.worker.CaptureReader") as capture:
                     capture.return_value.scan.return_value = {"status": status, "message": "Capture unavailable."}
                     worker = Worker(events, requests, stop, ".")
@@ -98,10 +98,46 @@ class SpellWorkerTests(unittest.TestCase):
     def test_live_detection_survives_unavailable_client(self):
         self.client.poll.return_value = {"status": "error"}
         with patch("mayhem.worker.StatsProvider"), \
-                patch("mayhem.worker.poll_active_player", return_value={"status": "live"}) as live:
+                patch("mayhem.worker.poll_active_player", return_value={"status": "live", "game_mode": "KIWI"}) as live:
             worker = Worker(queue.Queue(), queue.Queue(), Mock(), ".")
-            self.assertEqual(worker.poll_game(), {"status": "live"})
+            self.assertEqual(worker.poll_game(), {"status": "live", "game_mode": "KIWI", "phase": None, "is_aram": True})
         live.assert_called_once_with(timeout=0.5)
+
+    def test_lobby_and_end_phases_override_lingering_game_api(self):
+        with patch("mayhem.worker.StatsProvider"), patch("mayhem.worker.poll_active_player") as live:
+            worker = Worker(queue.Queue(), queue.Queue(), Mock(), ".")
+            for phase in ("None", "Lobby", "Matchmaking", "ReadyCheck", "WaitingForStats", "EndOfGame"):
+                self.client.poll.return_value = {"status": "waiting", "phase": phase, "is_aram": False}
+                self.assertEqual(worker.poll_game()["phase"], phase)
+            live.assert_not_called()
+
+    def test_loading_keeps_aram_context_without_live_api_data(self):
+        selection = {"status": "waiting", "phase": "GameStart", "is_aram": True, "game_mode": "KIWI"}
+        self.client.poll.return_value = selection
+        with patch("mayhem.worker.StatsProvider"), \
+                patch("mayhem.worker.poll_active_player", return_value={"status": "waiting"}):
+            worker = Worker(queue.Queue(), queue.Queue(), Mock(), ".")
+            self.assertEqual(worker.poll_game(), selection)
+
+    def test_client_mode_is_preserved_into_live_context(self):
+        self.client.poll.return_value = {"status": "waiting", "phase": "InProgress", "is_aram": False}
+        with patch("mayhem.worker.StatsProvider"), \
+                patch("mayhem.worker.poll_active_player", return_value={"status": "live", "game_mode": "ARAM"}):
+            worker = Worker(queue.Queue(), queue.Queue(), Mock(), ".")
+            result = worker.poll_game()
+        self.assertFalse(result["is_aram"])
+        self.assertEqual(result["phase"], "InProgress")
+
+    def test_other_modes_do_not_run_augment_ocr(self):
+        events, requests, stop = queue.Queue(), queue.Queue(), Mock()
+        stop.wait.side_effect = [False, True]
+        with patch("mayhem.worker.StatsProvider"), \
+                patch("mayhem.worker.poll_active_player", return_value={"status": "live", "game_mode": "CLASSIC"}), \
+                patch("mayhem.worker.CaptureReader") as capture:
+            worker = Worker(events, requests, stop, ".")
+            worker.run()
+        capture.return_value.scan.assert_not_called()
+        self.assertFalse(worker.last_game["is_aram"])
 
 
 if __name__ == "__main__":

@@ -39,6 +39,8 @@ def compact_count(count):
 class Companion:
     def __init__(self, root):
         self.root = root
+        # Build off-screen so startup does not flash a panel on the desktop.
+        root.withdraw()
         self.storage = app_dir()
         self.storage.mkdir(parents=True, exist_ok=True)
         self.settings_path = self.storage / "settings.json"
@@ -51,7 +53,10 @@ class Companion:
         self.catalog = None
         self.champion = self.live_champion = None
         self.follow = True
-        self.hidden = self.locked = self.game_live = False
+        self.hidden = True
+        self.locked = self.game_live = False
+        self.auto_visible = self.browse_mode = False
+        self.visibility_override = None
         self.game_status = "waiting"
         self.champ_select = self.champion_preview = False
         self.token = 0
@@ -421,13 +426,39 @@ class Companion:
         if not self.hidden and 101 not in self.hotkeys.registered:
             self.status.set("Cannot hide: Ctrl+Alt+M is in use by another app.")
             return
-        self.hidden = not self.hidden
-        if self.hidden:
+        self.visibility_override = self.hidden
+        self.set_visible(self.hidden)
+
+    def set_visible(self, visible):
+        if visible == (not self.hidden):
+            return
+        self.hidden = not visible
+        if not visible:
             self.root.withdraw()
         else:
             self.root.deiconify()
             self.root.attributes("-topmost", True)
             set_window_style(self.root, self.locked)
+
+    def update_visibility(self, game):
+        phase = game.get("phase")
+        active_phases = ("ChampSelect", "GameStart", "InProgress", "Reconnect")
+        in_match = (game.get("status") in ("champ_select", "live")
+                    or phase in active_phases)
+        visible = game.get("is_aram") is True and in_match
+        confirmed = (type(game.get("is_aram")) is bool
+                     or (phase is not None and phase not in active_phases))
+        if confirmed and visible != self.auto_visible:
+            # A manual hide lasts through this match; a manual show outside a
+            # match lasts until the next one starts. Unknown/error polls are
+            # not match boundaries and must not reset a manual choice.
+            self.visibility_override = None
+        if confirmed:
+            self.auto_visible = visible
+        if self.browse_mode:
+            self.set_visible(True if self.visibility_override is None else self.visibility_override)
+        else:
+            self.set_visible(visible if self.visibility_override is None else self.visibility_override)
 
     def toggle_lock(self):
         if not self.locked and 103 not in self.hotkeys.registered:
@@ -512,6 +543,7 @@ class Companion:
             self.status.set(str(payload)[:180])
 
     def handle_game(self, game):
+        self.update_visibility(game)
         previous_status = self.game_status
         self.game_status = game.get("status", "waiting")
         self.game_live = game.get("status") == "live"
@@ -584,6 +616,8 @@ class Companion:
         dialog.attributes("-topmost", True)
         content = (
             "Ctrl+Alt+M   Show / hide\nCtrl+Alt+L   Toggle click-through\nCtrl+Alt+S   Resume scanning\n\n"
+            "The panel appears for ARAM and Mayhem champion select and matches, then hides after the match. "
+            "Ctrl+Alt+M can open it manually outside a match.\n\n"
             "Use borderless or windowed League. Drag MAYHEM to move the panel outside the augment cards. "
             "Keep League focused for automatic reading. English augment titles are supported.\n\n"
             "Manual lookup: type a champion or augment, choose from the dropdown, then press Enter. "
@@ -641,6 +675,8 @@ def main():
     root = tk.Tk()
     app = Companion(root)
     if args.browse:
+        app.browse_mode = True
+        app.set_visible(True)
         app.follow = False
         app.auto.set(False)
         app.change_scan()

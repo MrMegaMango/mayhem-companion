@@ -6,6 +6,8 @@ A personal Windows prototype that reads your current League champion and the vis
 
 Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows treats a WSL/network path as an unsigned remote script, copy the project to a local Windows folder before running setup. Open **Mayhem Companion** from the desktop shortcut. Installed files live in `%USERPROFILE%\MayhemCompanion`; the development source can remain in WSL.
 
+The companion starts hidden and waits in the background. It appears automatically when you enter **ARAM or ARAM Mayhem champion select**, stays available through loading and the match, and hides when the match ends or you leave champion select. Other queues and the ordinary lobby do not open it. Custom games are recognized by their actual ARAM/Mayhem mode. **Ctrl+Alt+M** opens or hides it manually; hiding it during a match lasts until that match ends. Start with `--browse` to keep manual browsing available outside matches. Closing with × exits the background companion.
+
 - Use **borderless or windowed** League. Exclusive fullscreen is not supported.
 - Keep **Auto scan** checked. **Auto** champion selection follows your champion during champion select and in game, including champion swaps. Manually choosing a champion also works with automatic augment scanning.
 - Keep League focused with the three cards visible while scanning. Switching away pauses the reader and retains the last recognized choices with a paused label. Returning to League resumes scanning; choices clear after the selection disappears or the game ends.
@@ -27,7 +29,7 @@ Riot's [developer policy](https://developer.riotgames.com/docs/lol#game-policy) 
 
 ## Local operation
 
-Champion select is read from the local League Client API, using the current client's lockfile for its temporary local authentication token and port. The reader only issues GET requests for gameflow phase and champion-select session, matches your local player slot, and polls every 0.75 seconds. The token stays in memory and is never logged, cached, or uploaded. Riot does not guarantee compatibility of League Client API endpoints; manual champion browsing remains available if the client changes.
+Champion select is read from the local League Client API, using the current client's lockfile for its temporary local authentication token and port. The reader only issues GET requests for gameflow phase, gameflow session (queue/mode), and champion-select session, matches your local player slot, and polls every 0.75 seconds. The token stays in memory and is never logged, cached, or uploaded. Riot does not guarantee compatibility of League Client API endpoints; manual champion browsing remains available if the client changes.
 
 In-game champion detection uses Riot's documented read-only Live Client Data API on Windows `127.0.0.1:2999`. TLS relaxation is scoped to these loopback services, and redirects and proxies are refused. Public stats use normal HTTPS verification. The app does not read game memory, inject code, modify item sets, install drivers, automate gameplay, or request your account password.
 

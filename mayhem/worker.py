@@ -5,7 +5,7 @@ import threading
 import time
 
 from .capture import CaptureReader
-from .client import ClientReader
+from .client import ClientReader, is_aram_mode
 from .data import StatsProvider
 from .game import poll_active_player
 from .matching import detect_offers
@@ -41,7 +41,20 @@ class Worker(threading.Thread):
         selection = self.client.poll()
         if selection.get("status") == "champ_select":
             return selection
-        return poll_active_player(timeout=0.5)
+        phase = selection.get("phase")
+        if phase is not None and phase not in ("GameStart", "InProgress", "Reconnect"):
+            # The game API can linger after a match. A known lobby/end phase
+            # takes precedence so it cannot reopen the panel on the desktop.
+            return selection
+        game = poll_active_player(timeout=0.5)
+        if game.get("status") != "live" and phase is not None:
+            # Keep ARAM context while the game loads or reconnects.
+            return selection
+        game["phase"] = phase
+        known_mode = selection.get("is_aram")
+        game["is_aram"] = (known_mode if known_mode is not None else
+                           is_aram_mode(game.get("game_mode")) if game.get("game_mode") else None)
+        return game
 
     def run(self):
         try:
@@ -91,7 +104,8 @@ class Worker(threading.Thread):
                     self.last_game = {"status": "waiting"}
                     self.emit("game", self.last_game)
             if not (self.enabled and self.catalog and self.last_game
-                    and self.last_game.get("status") == "live"):
+                    and self.last_game.get("status") == "live"
+                    and self.last_game.get("is_aram") is True):
                 if self.last_offers:
                     self.last_offers = self.pending_offers = ()
                     self.emit("offers", [])

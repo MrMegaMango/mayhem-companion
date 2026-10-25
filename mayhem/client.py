@@ -5,7 +5,7 @@ The client supplies the schema through ``/help?format=Full``: a session's
 ``championPickIntent``, and ``spell1Id``/``spell2Id`` are numeric IDs. The LCU
 is an unsupported Riot interface, so missing or changed data fails closed.
 
-Only two GET endpoints are used at runtime. Lockfile authentication remains in
+Only three GET endpoints are used at runtime. Lockfile authentication remains in
 memory for the current poll; no credentials, player identifiers, or rosters
 are returned or logged. A pick intent is a preview, not a confirmed champion.
 """
@@ -28,8 +28,10 @@ from .game import _NoRedirect, _SPELLS_BY_RAW_ID, _state
 
 
 _PHASE_PATH = "/lol-gameflow/v1/gameflow-phase"
+_GAMEFLOW_PATH = "/lol-gameflow/v1/session"
 _SESSION_PATH = "/lol-champ-select/v1/session"
-_ALLOWED_PATHS = frozenset((_PHASE_PATH, _SESSION_PATH))
+_ALLOWED_PATHS = frozenset((_PHASE_PATH, _GAMEFLOW_PATH, _SESSION_PATH))
+_ACTIVE_PHASES = frozenset(("ChampSelect", "GameStart", "InProgress", "Reconnect"))
 _KNOWN_PHASES = frozenset((
     "None", "Lobby", "Matchmaking", "ReadyCheck", "ChampSelect", "GameStart",
     "InProgress", "Reconnect", "WaitingForStats", "PreEndOfGame", "EndOfGame",
@@ -39,6 +41,46 @@ _DEFAULT_LOCKFILE = Path(r"C:\Riot Games\League of Legends\lockfile")
 _DISCOVERY_INTERVAL = 10.0
 _MAX_RESPONSE_BYTES = 2_000_000
 _SPELL_NAMES = {identifier: name for identifier, name in _SPELLS_BY_RAW_ID.values()}
+# Riot's queues.json identifies these ARAM queues, including Mayhem (2400).
+# A custom queue (0), or Howling Abyss map alone, does not identify ARAM.
+_ARAM_QUEUE_IDS = frozenset((65, 67, 100, 450, 720, 2400))
+# KIWI was verified in the local Live Client API during a Mayhem custom game.
+_ARAM_MODES = frozenset(("ARAM", "KIWI"))
+# Public gameModes.json provides these non-ARAM mode tokens. Unknown future
+# modes remain unknown rather than accidentally inheriting an earlier game.
+_OTHER_MODES = frozenset((
+    "CLASSIC", "ODIN", "TUTORIAL", "URF", "DOOMBOTSTEEMO", "ONEFORALL",
+    "ASCENSION", "FIRSTBLOOD", "KINGPORO", "SIEGE", "ASSASSINATE", "ARSR",
+    "DARKSTAR", "STARGUARDIAN", "PROJECT", "GAMEMODEX", "ODYSSEY",
+    "NEXUSBLITZ", "ULTBOOK", "SWIFTPLAY", "BRAWL",
+))
+
+
+def is_aram_mode(mode: Any) -> bool:
+    """Recognize verified ARAM/Mayhem modes; never use partial name matches."""
+    return isinstance(mode, str) and mode.strip().upper() in _ARAM_MODES
+
+
+def _gameflow_context(session: Any) -> dict[str, Any]:
+    result = {"is_aram": None, "game_mode": None}
+    if not isinstance(session, Mapping):
+        return result
+    game = session.get("gameData")
+    queue = game.get("queue") if isinstance(game, Mapping) else None
+    queue = queue if isinstance(queue, Mapping) else {}
+    # The selected map's gameMode is also in the local /help schema. It is
+    # especially useful for custom games, whose generic queue can be empty.
+    for source in (session.get("map"), queue):
+        if not isinstance(source, Mapping):
+            continue
+        mode = source.get("gameMode")
+        mode = mode.strip().upper() if isinstance(mode, str) else None
+        if mode in _ARAM_MODES or mode in _OTHER_MODES:
+            result.update(is_aram=is_aram_mode(mode), game_mode=mode)
+            return result
+    if type(queue.get("id")) is int and queue["id"] in _ARAM_QUEUE_IDS:
+        result["is_aram"] = True
+    return result
 
 
 @dataclass(frozen=True, repr=False)
@@ -130,7 +172,8 @@ def _get_json(opener, credentials: _Credentials, path: str, timeout: float) -> A
 
 def _client_state(status: str, message: str, phase: str | None = None) -> dict[str, Any]:
     result = _state(status, message)
-    result.update(phase=phase if phase in _KNOWN_PHASES else None, champion_preview=False)
+    result.update(phase=phase if phase in _KNOWN_PHASES else None,
+                  champion_preview=False, is_aram=None)
     return result
 
 
@@ -218,25 +261,46 @@ class ClientReader:
             self._needs_discovery = True
             return _client_state("waiting", "Waiting for the League client.")
         phase = None
+        context = {"is_aram": None, "game_mode": None}
+
+        def finish(result):
+            result.update(context)
+            return result
+
         try:
             phase = _get_json(self._opener, credentials, _PHASE_PATH, timeout)
             if not isinstance(phase, str):
                 return _client_state("error", "The local client returned an unexpected phase.")
             self._needs_discovery = False
-            if phase != "ChampSelect":
+            if phase not in _ACTIVE_PHASES:
                 return _client_state("waiting", "Waiting for champion select.", phase)
-            return _session_state(_get_json(self._opener, credentials, _SESSION_PATH, timeout))
+            # This resource supplies queue.gameMode for regular and custom
+            # games. Read it only while a game is starting or active, and do
+            # not discard champion selection if supplementary metadata fails.
+            try:
+                gameflow = _get_json(self._opener, credentials, _GAMEFLOW_PATH, timeout)
+                context = _gameflow_context(gameflow)
+                current_phase = gameflow.get("phase") if isinstance(gameflow, Mapping) else None
+                if isinstance(current_phase, str) and current_phase in _KNOWN_PHASES:
+                    phase = current_phase
+                if phase not in _ACTIVE_PHASES:
+                    return _client_state("waiting", "Waiting for champion select.", phase)
+            except (HTTPError, URLError, OSError, ValueError, TypeError, UnicodeError):
+                pass
+            if phase != "ChampSelect":
+                return finish(_client_state("waiting", "League game active.", phase))
+            return finish(_session_state(_get_json(self._opener, credentials, _SESSION_PATH, timeout)))
         except HTTPError as error:
             if error.code in (401, 403):
                 self._needs_discovery = True
-                return _client_state("waiting", "Waiting for the League client connection.")
+                return finish(_client_state("waiting", "Waiting for the League client connection.", phase))
             if error.code in (404, 503):
                 if phase == "ChampSelect":
-                    return _client_state("champ_select", "Waiting for your champion selection.", phase)
-                return _client_state("waiting", "Waiting for champion select.")
-            return _client_state("error", "The local client API is temporarily unavailable.")
+                    return finish(_client_state("champ_select", "Waiting for your champion selection.", phase))
+                return finish(_client_state("waiting", "Waiting for champion select.", phase))
+            return finish(_client_state("error", "The local client API is temporarily unavailable.", phase))
         except (URLError, OSError):
             self._needs_discovery = True
-            return _client_state("waiting", "Waiting for the League client connection.")
+            return finish(_client_state("waiting", "Waiting for the League client connection.", phase))
         except (ValueError, TypeError, UnicodeError):
-            return _client_state("error", "The local client returned an unreadable response.")
+            return finish(_client_state("error", "The local client returned an unreadable response.", phase))
