@@ -11,6 +11,9 @@ from .matching import detect_offers
 
 
 class Worker(threading.Thread):
+    ACTIVE_SCAN_SECONDS = 0.35
+    IDLE_SCAN_SECONDS = 0.8
+
     def __init__(self, output, requests, stop, cache):
         super().__init__(daemon=True, name="mayhem-reader")
         self.output, self.requests, self.stop = output, requests, stop
@@ -35,7 +38,7 @@ class Worker(threading.Thread):
             self.load()
         except Exception as exc:
             self.emit("error", f"Data unavailable: {exc}. Use Retry data.")
-        while not self.stop.wait(0.1):
+        while not self.stop.wait(0.05):
             try:
                 while True:
                     task, payload = self.requests.get_nowait()
@@ -85,11 +88,12 @@ class Worker(threading.Thread):
                 continue
             if now < self.next_scan:
                 continue
-            self.next_scan = now + 1.3
+            self.next_scan = now + self.ACTIVE_SCAN_SECONDS
             try:
                 result = self.capture.scan()
                 if result.get("status") != "ok":
                     self.pending_offers = ()
+                    self.next_scan = now + self.IDLE_SCAN_SECONDS
                     if result.get("status") == "waiting":
                         message = "Scan paused · focus League to resume."
                         if self.last_offers:
@@ -115,6 +119,7 @@ class Worker(threading.Thread):
                         self.emit("offers", offers)
                     self.pending_offers = signature
                 else:
+                    self.next_scan = now + self.IDLE_SCAN_SECONDS
                     self.pending_offers = ()
                     if self.last_offers and now - self.last_seen > 4:
                         self.last_offers = ()
