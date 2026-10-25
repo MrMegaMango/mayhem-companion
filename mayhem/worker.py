@@ -5,6 +5,7 @@ import threading
 import time
 
 from .capture import CaptureReader
+from .client import ClientReader
 from .data import StatsProvider
 from .game import poll_active_player
 from .matching import detect_offers
@@ -20,6 +21,7 @@ class Worker(threading.Thread):
         self.provider = StatsProvider(cache)
         self.catalog = None
         self.capture = CaptureReader()
+        self.client = ClientReader()
         self.enabled = True
         self.last_game = None
         self.next_poll = self.next_scan = 0.0
@@ -32,6 +34,14 @@ class Worker(threading.Thread):
     def load(self):
         self.catalog = self.provider.load_catalog()
         self.emit("catalog", self.catalog)
+
+    def poll_game(self):
+        # The lobby exposes the champion while spells can still be changed.
+        # Keep the in-game API as the source once champion select has ended.
+        selection = self.client.poll()
+        if selection.get("status") == "champ_select":
+            return selection
+        return poll_active_player(timeout=0.5)
 
     def run(self):
         try:
@@ -71,9 +81,9 @@ class Worker(threading.Thread):
                 self.emit("error", str(exc))
             now = time.monotonic()
             if now >= self.next_poll:
-                self.next_poll = now + 2
+                self.next_poll = now + 0.75
                 try:
-                    game = poll_active_player()
+                    game = self.poll_game()
                     self.emit("game", game)
                     self.last_game = game
                 except Exception:

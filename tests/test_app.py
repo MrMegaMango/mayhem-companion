@@ -20,6 +20,9 @@ class StateTests(unittest.TestCase):
         app.live_champion = "157"
         app.locked = False
         app.game_live = True
+        app.game_status = "live"
+        app.champ_select = app.champion_preview = False
+        app.switch_view = Mock()
         app.token = 5
         app.is_auto_offer = True
         app.offer_ids = ["1", "2", "3"]
@@ -52,6 +55,65 @@ class StateTests(unittest.TestCase):
         self.assertEqual(app.offer_ids, [None, None, None])
         for card in app.cards:
             card["value"].configure.assert_called_with(text="—", fg="#edf4ff")
+
+    def test_champion_select_resolves_id_opens_spells_and_fetches_before_game(self):
+        app = self.make_view()
+        app.champion = app.live_champion = app.spell_champion = None
+        app.handle_game({"status": "champ_select", "champion_id": "157",
+                         "summoner_spells": [{"id": "4", "name": "Flash"}, {"id": "32", "name": "Mark"}]})
+        self.assertEqual(app.champion, "157")
+        self.assertFalse(app.game_live)
+        self.assertTrue(app.champ_select)
+        self.assertEqual(app.live_spells[0]["id"], "4")
+        app.switch_view.assert_called_once_with("spells")
+        self.assertEqual(app.badge.configure.call_args.kwargs["text"], "CHAMP SELECT")
+        self.assertEqual(app.requests.get_nowait(), ("spells", (8, "157")))
+
+    def test_champion_trade_invalidates_old_pair_data_and_fetches_new_champion(self):
+        app = self.make_view()
+        app.catalog["champions"]["22"] = {"name": "Ashe", "riotId": "Ashe", "slug": "ashe"}
+        app.game_status = "champ_select"
+        app.handle_game({"status": "champ_select", "champion_id": "22"})
+        self.assertEqual(app.champion, "22")
+        self.assertEqual(app.requests.get_nowait(), ("spells", (8, "22")))
+        app.handle_event("spells", (7, {"champion_id": "157", "rows": []}))
+        self.assertIsNone(app.spell_data)
+
+    def test_champion_select_without_pick_clears_previous_match(self):
+        app = self.make_view()
+        app.handle_game({"status": "champ_select", "champion_id": None})
+        self.assertIsNone(app.champion)
+        self.assertEqual(app.offer_ids, [None, None, None])
+        app.switch_view.assert_called_once_with("spells")
+
+    def test_unknown_champion_id_does_not_reuse_last_champion(self):
+        app = self.make_view()
+        app.handle_game({"status": "champ_select", "champion_id": "99999"})
+        self.assertIsNone(app.champion)
+
+    def test_tab_switch_happens_once_per_phase_and_manual_browse_is_preserved(self):
+        app = self.make_view()
+        selection = {"status": "champ_select", "champion_id": "157"}
+        app.handle_game(selection)
+        app.handle_game(selection)
+        app.switch_view.assert_called_once_with("spells")
+        app.handle_game({"status": "live", "champion_name": "Yasuo"})
+        self.assertEqual(app.switch_view.call_args.args, ("augments",))
+        app.follow = False
+        app.switch_view.reset_mock()
+        app.handle_game({"status": "champ_select", "champion_id": None})
+        self.assertEqual(app.champion, "157")
+        app.switch_view.assert_not_called()
+
+    def test_spell_change_during_select_updates_current_pair_without_refetch(self):
+        app = self.make_view()
+        app.game_status = "champ_select"
+        app.view.get.return_value = "spells"
+        app.render_spells = Mock()
+        app.handle_game({"status": "champ_select", "champion_id": "157",
+                         "summoner_spells": [{"id": "4", "name": "Flash"}, {"id": "6", "name": "Ghost"}]})
+        app.render_spells.assert_called_once()
+        self.assertTrue(app.requests.empty())
 
     def test_return_to_auto_discards_manual_choices_and_requests_new_scan(self):
         app = self.make_view()
@@ -133,6 +195,18 @@ class StateTests(unittest.TestCase):
         result = app.spell_tree.insert.call_args.kwargs
         self.assertEqual(result["values"][1], "—")
         self.assertNotIn("current", result["tags"])
+
+    def test_spell_pair_highlights_during_champion_select(self):
+        app = self.make_view()
+        app.game_live = False
+        app.champ_select = True
+        app.live_spells = [{"id": "32", "name": "Mark"}, {"id": "4", "name": "Flash"}]
+        app.spell_data = {"rows": [
+            {"spell_ids": ["4", "32"], "spell_names": ["Flash", "Mark"], "win_rate": .58,
+             "sample_count": 1000, "pick_rate": .9}]}
+        app.render_spells()
+        self.assertEqual(app.spell_tree.insert.call_args.kwargs["tags"], ("current",))
+        self.assertEqual(app.status.set.call_args.args[0], "Champion select · Mark + Flash")
 
     def test_background_augment_response_does_not_replace_spells_source_date(self):
         app = self.make_view()

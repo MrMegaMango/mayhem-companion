@@ -52,6 +52,8 @@ class Companion:
         self.champion = self.live_champion = None
         self.follow = True
         self.hidden = self.locked = self.game_live = False
+        self.game_status = "waiting"
+        self.champ_select = self.champion_preview = False
         self.token = 0
         self.is_auto_offer = False
         self.offer_ids = [None, None, None]
@@ -243,7 +245,11 @@ class Companion:
         self.requests.put(("scan", None))
         self.champ_var.set(self.catalog["champions"][self.champion]["name"]
                            if self.champion and self.catalog else "Auto detect champion")
-        self.badge.configure(text="LIVE" if self.game_live else "WAITING", fg=ACCENT if self.game_live else MUTED)
+        active = self.game_live or self.champ_select
+        self.badge.configure(text="CHAMP SELECT" if self.champ_select else "LIVE" if self.game_live else "WAITING",
+                             fg=ACCENT if active else MUTED)
+        if self.champ_select:
+            self.switch_view("spells")
         self.lookup()
 
     def select_augment(self, index):
@@ -353,7 +359,7 @@ class Companion:
                                    row["sample_count"]), reverse=True)
         live_ids = [spell.get("id") for spell in self.live_spells]
         current = tuple(sorted(str(ident) for ident in live_ids)) if len(live_ids) == 2 and all(live_ids) else ()
-        highlight = self.game_live and self.champion == self.live_champion and len(set(current)) == 2
+        highlight = (self.game_live or self.champ_select) and self.champion == self.live_champion and len(set(current)) == 2
         matched = False
         for index, row in enumerate(rows):
             is_current = highlight and tuple(sorted(row["spell_ids"])) == current
@@ -381,10 +387,12 @@ class Companion:
 
     def update_spell_status(self):
         if not self.champion:
-            self.status.set("Choose a champion or wait for a game.")
-        elif self.game_live and self.champion == self.live_champion:
+            self.status.set("Waiting for your champion selection." if self.champ_select
+                            else "Choose a champion or enter champion select.")
+        elif (self.game_live or self.champ_select) and self.champion == self.live_champion:
             names = [spell.get("name") for spell in self.live_spells if spell.get("name")]
-            self.status.set("Live · " + " + ".join(names) if names else "Live champion detected")
+            phase = "Champion preview" if self.champ_select and self.champion_preview else "Champion select" if self.champ_select else "Live"
+            self.status.set(phase + " · " + " + ".join(names) if names else phase)
         else:
             self.status.set("Browsing spell pairs for the selected champion")
 
@@ -454,7 +462,7 @@ class Companion:
                 card["box"]["values"] = self.augment_names
             marker = " · cached/offline" if payload.get("stale") else ""
             self.source.set(f"ARAMKit · {payload.get('version', '')} · {payload.get('data_date', '')}{marker}")
-            self.status.set("Waiting for a game. You can also browse a champion and augments.")
+            self.status.set("Waiting for champion select. You can also browse a champion.")
             self.lookup_spells(force=True)
         elif kind == "game":
             self.handle_game(payload)
@@ -504,27 +512,40 @@ class Companion:
             self.status.set(str(payload)[:180])
 
     def handle_game(self, game):
+        previous_status = self.game_status
+        self.game_status = game.get("status", "waiting")
         self.game_live = game.get("status") == "live"
+        self.champ_select = game.get("status") == "champ_select"
+        self.champion_preview = bool(game.get("champion_preview"))
+        active = self.game_live or self.champ_select
         previous_spells = self.live_spells
-        self.live_spells = game.get("summoner_spells", []) if self.game_live else []
+        self.live_spells = game.get("summoner_spells", []) if active else []
         ident = None
-        if self.game_live and self.catalog:
-            ident = resolve_champion_id(game.get("raw_champion") or game.get("champion_name") or "",
-                                        self.catalog["champions"])
+        if active and self.catalog:
+            candidate = str(game.get("champion_id"))
+            ident = candidate if candidate in self.catalog["champions"] else resolve_champion_id(
+                game.get("raw_champion") or game.get("champion_name") or "", self.catalog["champions"])
             ident = str(ident) if ident is not None else None
         changed = ident != self.live_champion
+        phase_changed = previous_status != self.game_status
         self.live_champion = ident
         if self.follow:
-            if changed or self.champion != ident:
+            if changed or phase_changed or self.champion != ident:
                 self.champion = ident
                 self.clear_offers()
                 self.champ_var.set(self.catalog["champions"][ident]["name"] if ident else "Auto detect champion")
                 # Levels do not reliably identify pending picks or extra-augment mechanics.
                 self.stage.set("All picks")
-            self.badge.configure(text="LIVE" if ident else "WAITING", fg=ACCENT if ident else MUTED)
-            if not self.game_live and not self.locked:
-                self.status.set("Waiting for a game. Choose a champion to browse now.")
-        if (changed or previous_spells != self.live_spells) and self.view.get() == "spells":
+            self.badge.configure(text="CHAMP SELECT" if self.champ_select else "LIVE" if ident else "WAITING",
+                                 fg=ACCENT if active else MUTED)
+            if phase_changed:
+                if self.champ_select:
+                    self.switch_view("spells")
+                elif self.game_live:
+                    self.switch_view("augments")
+            if not active and not self.locked:
+                self.status.set("Waiting for champion select. Choose a champion to browse now.")
+        if (changed or phase_changed or previous_spells != self.live_spells) and self.view.get() == "spells":
             self.render_spells()
         elif self.view.get() == "spells":
             self.update_spell_status()
@@ -566,9 +587,10 @@ class Companion:
             "Use borderless or windowed League. Drag MAYHEM to move the panel outside the augment cards. "
             "Keep League focused for automatic reading. English augment titles are supported.\n\n"
             "Manual lookup: type a champion or augment, choose from the dropdown, then press Enter. "
-            "Auto returns to your live champion. Pick filters are manual; All picks is the default.\n\n"
+            "Auto follows your champion in champion select and in game. Pick filters are manual; All picks is the default.\n\n"
             "Spells shows champion-specific spell-pair rates, game counts and pick rates. "
-            "Your current pair is highlighted when detected. These are pair statistics, not individual-spell rates.\n\n"
+            "Spells opens during champion select, with your current pair highlighted. Augments opens when the game starts. "
+            "These are pair statistics, not individual-spell rates.\n\n"
             "Rates come from ARAMKit's third-party sample, not all servers. Low samples are marked; "
             "missing champion data stays blank. Screenshots stay in memory on this computer.\n\n"
             "Riot's developer policy prohibits augment win-rate displays in apps and overlays. "
