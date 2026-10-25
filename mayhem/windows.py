@@ -65,8 +65,9 @@ class Hotkeys:
     No Tk method or user callback is called by the native message-loop thread.
     """
 
-    def __init__(self, root, actions, *, _api_factory=None, _ready_timeout=2.0):
+    def __init__(self, root, actions, *, on_failure=None, _api_factory=None, _ready_timeout=2.0):
         self.root, self.actions = root, dict(actions)
+        self._on_failure = on_failure
         self.registered = []
         self._registration_result = []
         self._events = queue.Queue()
@@ -141,6 +142,9 @@ class Hotkeys:
         """Make the panel usable if its only recovery shortcut disappears."""
         self.registered.clear()
         try:
+            if self._on_failure is not None:
+                self._on_failure()
+                return
             self.root.deiconify()
             self.root.attributes("-topmost", True)
             set_window_style(self.root, False)

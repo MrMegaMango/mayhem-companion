@@ -114,6 +114,20 @@ class HotkeyTests(unittest.TestCase):
         self.assertNotEqual(api.owner, root.main_thread)
         self.assertEqual(len(root.scheduled), 1)
 
+    def test_failure_can_delegate_recovery_to_app_with_a_tray(self):
+        root, api = FakeRoot(), FakeApi()
+        calls = []
+        keys = Hotkeys(root, {101: (ord("M"), lambda: None)},
+                       on_failure=lambda: calls.append(threading.get_ident()), _api_factory=lambda: api)
+        self.addCleanup(keys.close)
+        with self.assertLogs(level="ERROR"):
+            api.messages.put(RuntimeError("fixture failure"))
+            self.assertTrue(wait_for(lambda: not keys._thread.is_alive()))
+        root.fire()
+        self.assertEqual(calls, [root.main_thread])
+        self.assertFalse(root.visible)
+        self.assertEqual(keys.registered, [])
+
     def test_callback_only_runs_when_ui_drains_queue(self):
         calls = []
         root, api, keys = self.make(callback=lambda: calls.append(threading.get_ident()))

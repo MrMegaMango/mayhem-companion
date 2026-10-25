@@ -19,6 +19,7 @@ class StateTests(unittest.TestCase):
         app.worker = Mock()
         app.requests = queue.Queue()
         app.events = queue.Queue()
+        app._closed = app.recovery_visible = False
         app.champ_var, app.badge, app.stage = Mock(), Mock(), Mock()
         app.status, app.source, app.root = Mock(), Mock(), Mock()
         app.follow = True
@@ -30,6 +31,9 @@ class StateTests(unittest.TestCase):
         app.visibility_override = None
         app.hotkeys = Mock()
         app.hotkeys.registered = [101, 102, 103]
+        app.tray = Mock()
+        app.tray.available = True
+        app.lock_button = Mock()
         app.game_live = True
         app.game_status = "live"
         app.champ_select = app.champion_preview = False
@@ -85,6 +89,76 @@ class StateTests(unittest.TestCase):
         self.assertEqual(saved["position"], [-1000, -320])
         self.assertEqual(saved["display_device"], "portrait")
         self.assertEqual(saved["display_preference"], "portrait")
+        app.close()
+        app.tray.close.assert_called_once()
+        app.root.destroy.assert_called_once()
+
+    def test_tray_show_unlocks_panel_and_survives_idle_poll(self):
+        app = self.make_view()
+        app.locked = True
+        app.handle_event("tray_action", "show")
+        self.assertFalse(app.hidden)
+        self.assertFalse(app.locked)
+        app.update_visibility({"status": "waiting", "phase": "None", "is_aram": None})
+        self.assertFalse(app.hidden)
+
+    def test_tray_can_hide_and_reopen_without_show_shortcut(self):
+        app = self.make_view()
+        app.hotkeys.registered = []
+        app.handle_event("tray_action", "show")
+        app.handle_event("tray_action", "hide")
+        self.assertTrue(app.hidden)
+        app.handle_event("tray_action", "show")
+        self.assertFalse(app.hidden)
+
+    def test_both_recovery_controls_failing_keeps_panel_accessible(self):
+        app = self.make_view()
+        app.hotkeys.registered = []
+        app.tray.available = False
+        app.handle_event("tray_status", False)
+        app.update_visibility({"status": "waiting", "phase": "None", "is_aram": None})
+        self.assertFalse(app.hidden)
+        app.set_manual_visible(False)
+        self.assertFalse(app.hidden)
+        app.tray.available = True
+        app.handle_event("tray_status", True)
+        self.assertTrue(app.hidden)
+        self.assertFalse(app.recovery_visible)
+
+    def test_shortcut_failure_with_working_tray_does_not_open_hidden_panel(self):
+        app = self.make_view()
+        app.hotkeys.registered = []
+        app.handle_event("hotkeys_failed", None)
+        self.assertTrue(app.hidden)
+        app.root.deiconify.assert_not_called()
+
+    def test_tray_failure_unlocks_when_only_show_shortcut_survives(self):
+        app = self.make_view()
+        app.locked = True
+        app.hotkeys.registered = [101]
+        app.tray.available = False
+        app.handle_event("tray_status", False)
+        self.assertFalse(app.locked)
+        self.assertTrue(app.hidden)
+        app.lock_button.configure.assert_called_with(text="Lock")
+        app.root.deiconify.assert_not_called()
+
+    def test_tray_exit_stops_services_and_does_not_schedule_after_destroy(self):
+        app = self.make_view()
+        app.settings = {}
+        app.stop, app.settings_path = Mock(), Mock()
+        app.root.winfo_x.return_value = -464
+        app.root.winfo_y.return_value = 313
+        app.events.put(("tray_action", "exit"))
+        app.events.put(("game", {"status": "live"}))
+        app.drain()
+        self.assertTrue(app._closed)
+        app.stop.set.assert_called_once()
+        app.tray.close.assert_called_once()
+        app.hotkeys.close.assert_called_once()
+        app.root.destroy.assert_called_once()
+        app.root.after.assert_not_called()
+        self.assertEqual(app.events.qsize(), 1)
 
     def test_hidden_on_desktop_lobby_other_modes_and_unknown_mode(self):
         app = self.make_view()

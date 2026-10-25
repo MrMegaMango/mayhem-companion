@@ -8,6 +8,8 @@ Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows t
 
 The companion starts hidden and waits in the background. It appears automatically when you enter **ARAM or ARAM Mayhem champion select**, stays available through loading and the match, and hides when the match ends or you leave champion select. Other queues and the ordinary lobby do not open it. Custom games are recognized by their actual ARAM/Mayhem mode. **Ctrl+Alt+M** opens or hides it manually; hiding it during a match lasts until that match ends. Start with `--browse` to keep manual browsing available outside matches. Closing with × exits the background companion.
 
+The **M icon in the Windows notification area** remains available while the panel is hidden. Click it to show the panel, or right-click for **Show companion**, **Hide companion**, and **Exit**. Showing from the tray also unlocks click-through controls. Windows may place the icon in its hidden-icons menu. Exit removes the icon and stops the background companion.
+
 - Use **borderless or windowed** League. Exclusive fullscreen is not supported.
 - Keep **Auto scan** checked. **Auto** champion selection follows your champion during champion select and in game, including champion swaps. Manually choosing a champion also works with automatic augment scanning.
 - Keep League focused with the three cards visible while scanning. Switching away pauses the reader and retains the last recognized choices with a paused label. Returning to League resumes scanning; choices clear after the selection disappears or the game ends.

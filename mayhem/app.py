@@ -18,6 +18,7 @@ from .windows import Hotkeys, set_window_style
 from .worker import Worker
 from .data import resolve_champion_id
 from .displays import list_displays, select_display, place_panel
+from .tray import TrayIcon
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -50,6 +51,7 @@ class Companion:
         except (OSError, ValueError):
             self.settings = {}
         self.events, self.requests = queue.Queue(), queue.Queue()
+        self._closed = self.recovery_visible = False
         self.stop = threading.Event()
         self.catalog = None
         self.champion = self.live_champion = None
@@ -74,7 +76,10 @@ class Companion:
         self.build()
         self.hotkeys = Hotkeys(root, {101: (ord("M"), self.toggle_visible),
                                      102: (ord("S"), self.rescan),
-                                     103: (ord("L"), self.toggle_lock)})
+                                     103: (ord("L"), self.toggle_lock)},
+                               on_failure=lambda: self.events.put(("hotkeys_failed", None)))
+        self.tray = TrayIcon(self.events)
+        self.tray.start()
         if len(self.hotkeys.registered) != 3:
             self.status.set("A shortcut is already in use. Window controls still work.")
         self.worker = Worker(self.events, self.requests, self.stop, self.storage / "cache")
@@ -431,11 +436,36 @@ class Companion:
         self.status.set("Scanning when League is in the foreground…")
 
     def toggle_visible(self):
-        if not self.hidden and 101 not in self.hotkeys.registered:
-            self.status.set("Cannot hide: Ctrl+Alt+M is in use by another app.")
+        self.set_manual_visible(self.hidden)
+
+    def set_manual_visible(self, visible):
+        if not visible and 101 not in self.hotkeys.registered and not self.tray.available:
+            self.status.set("Cannot hide: the tray and show shortcut are unavailable.")
             return
-        self.visibility_override = self.hidden
-        self.set_visible(self.hidden)
+        self.visibility_override = visible
+        self.set_visible(visible)
+
+    def show_from_tray(self):
+        # The tray must also recover a click-through panel without a shortcut.
+        self.unlock_panel()
+        self.set_manual_visible(True)
+
+    def unlock_panel(self):
+        self.locked = False
+        self.lock_button.configure(text="Lock")
+        set_window_style(self.root, False)
+
+    def check_recovery(self):
+        if self.locked and not self.tray.available and 103 not in self.hotkeys.registered:
+            self.unlock_panel()
+        was_recovering = self.recovery_visible
+        self.recovery_visible = not self.tray.available and 101 not in self.hotkeys.registered
+        if self.recovery_visible:
+            self.show_from_tray()
+            self.status.set("Tray and shortcuts unavailable. Restart the companion; this panel will stay open.")
+        elif was_recovering:
+            self.visibility_override = None
+            self.set_visible(self.auto_visible or self.browse_mode)
 
     def set_visible(self, visible):
         if visible == (not self.hidden):
@@ -464,14 +494,16 @@ class Companion:
             self.visibility_override = None
         if confirmed:
             self.auto_visible = visible
-        if self.browse_mode:
+        if self.recovery_visible:
+            self.set_visible(True)
+        elif self.browse_mode:
             self.set_visible(True if self.visibility_override is None else self.visibility_override)
         else:
             self.set_visible(visible if self.visibility_override is None else self.visibility_override)
 
     def toggle_lock(self):
-        if not self.locked and 103 not in self.hotkeys.registered:
-            self.status.set("Cannot lock: Ctrl+Alt+L is unavailable.")
+        if not self.locked and 103 not in self.hotkeys.registered and not self.tray.available:
+            self.status.set("Cannot lock: the tray and unlock shortcut are unavailable.")
             return
         self.locked = not self.locked
         self.lock_button.configure(text="Locked" if self.locked else "Lock")
@@ -480,7 +512,7 @@ class Companion:
 
     def drain(self):
         try:
-            while True:
+            while not self._closed:
                 kind, payload = self.events.get_nowait()
                 self.handle_event(kind, payload)
         except queue.Empty:
@@ -489,10 +521,20 @@ class Companion:
             logging.exception("Panel update failed")
             self.status.set("An update failed. Retry data or restart the companion.")
         finally:
-            self.root.after(100, self.drain)
+            if not self._closed:
+                self.root.after(100, self.drain)
 
     def handle_event(self, kind, payload):
-        if kind == "catalog":
+        if kind == "tray_action":
+            if payload == "show":
+                self.show_from_tray()
+            elif payload == "hide":
+                self.set_manual_visible(False)
+            elif payload == "exit":
+                self.close()
+        elif kind in ("tray_status", "hotkeys_failed"):
+            self.check_recovery()
+        elif kind == "catalog":
             self.catalog = payload
             self.champion_names = sorted(x["name"] for x in payload["champions"].values())
             self.augment_names = sorted(x["name"] for x in payload["augments"].values())
@@ -627,6 +669,8 @@ class Companion:
             "Ctrl+Alt+M   Show / hide\nCtrl+Alt+L   Toggle click-through\nCtrl+Alt+S   Resume scanning\n\n"
             "The panel appears for ARAM and Mayhem champion select and matches, then hides after the match. "
             "Ctrl+Alt+M can open it manually outside a match.\n\n"
+            "The M icon in the Windows tray also opens the panel. Right-click it for Show, Hide, or Exit. "
+            "Showing from the tray unlocks click-through controls.\n\n"
             "Use borderless or windowed League. Drag MAYHEM to move the panel outside the augment cards. "
             "Keep League focused for automatic reading. English augment titles are supported.\n\n"
             "Manual lookup: type a champion or augment, choose from the dropdown, then press Enter. "
@@ -647,7 +691,12 @@ class Companion:
         self.button(dialog, "Close", dialog.destroy).pack(side="right", padx=20, pady=10)
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
         self.stop.set()
+        if hasattr(self, "tray"):
+            self.tray.close()
         if hasattr(self, "hotkeys"):
             self.hotkeys.close()
         try:
@@ -671,7 +720,7 @@ def main():
         kernel32.CreateMutexW.restype = ctypes.c_void_p
         instance_mutex = kernel32.CreateMutexW(None, False, "Local\\MayhemCompanion.Personal")
         if ctypes.get_last_error() == 183:
-            ctypes.windll.user32.MessageBoxW(None, "Mayhem Companion is already running.\nPress Ctrl+Alt+M to show or hide it.", "Mayhem Companion", 0x40)
+            ctypes.windll.user32.MessageBoxW(None, "Mayhem Companion is already running.\nUse its M tray icon or Ctrl+Alt+M to open it.", "Mayhem Companion", 0x40)
             return
     storage = app_dir()
     storage.mkdir(parents=True, exist_ok=True)
@@ -694,6 +743,7 @@ def main():
     try:
         root.mainloop()
     finally:
+        app.close()
         if instance_mutex:
             kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
             kernel32.CloseHandle(instance_mutex)
