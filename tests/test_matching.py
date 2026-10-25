@@ -1,0 +1,172 @@
+import unittest
+from mayhem.matching import detect_offers, match_augments, normalize_title
+
+CATALOG = {
+    "stats": {"name": "Stats!"},
+    "stats2": {"name": "Stats on Stats!"},
+    "stats3": {"name": "Stats on Stats on Stats!"},
+    "sword": {"name": "Draw Your Sword"},
+    "basic": {"name": "Back To Basics"},
+    "wind": {"name": "Windspeaker's Blessing"},
+    "scoped": {"name": "Scoped Weapons"},
+    "scopier": {"name": "Scopier Weapons"},
+    "scopiest": {"name": "Scopiest Weapons"},
+}
+
+
+def line(text, x, y=200, height=24):
+    return {"text": text, "x": x, "y": y, "width": 160, "height": height}
+
+
+class MatchingTests(unittest.TestCase):
+    def test_punctuation_and_case_normalization(self):
+        results = match_augments(["WINDSPEAKER’S BLESSING"], CATALOG)
+        self.assertEqual(results[0]["id"], "wind")
+        self.assertEqual(results[0]["similarity"], 1)
+
+    def test_matches_whole_title_not_shorter_stats_substring(self):
+        self.assertEqual([m["id"] for m in match_augments(["Stats on Stats!"], CATALOG)], ["stats2"])
+        self.assertEqual([m["id"] for m in match_augments(["Stats on Stats on Stats!"], CATALOG)], ["stats3"])
+
+    def test_description_containing_title_is_rejected(self):
+        self.assertEqual(match_augments(["Gain Stats on Stats! and other bonuses", "Draw Your Sword and gain power"], CATALOG), [])
+
+    def test_small_ocr_error_is_accepted(self):
+        results = match_augments(["Back To Baslcs"], CATALOG)
+        self.assertEqual(results[0]["id"], "basic")
+        self.assertGreater(results[0]["similarity"], .9)
+
+    def test_short_fuzzy_titles_are_rejected(self):
+        self.assertEqual(match_augments(["Stafs!"], CATALOG), [])
+
+    def test_ambiguous_similar_names_are_rejected(self):
+        self.assertEqual(match_augments(["Scoper Weapons"], CATALOG), [])
+
+    def test_duplicate_normalized_catalog_names_are_ambiguous(self):
+        self.assertEqual(match_augments(["Stats"], {1: "Stats!", 2: "Stats"}), [])
+
+    def test_duplicate_ocr_lines_yield_one_candidate(self):
+        results = match_augments(["Back To Baslcs", "Back To Basics", "Back To Basics"], CATALOG)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["similarity"], 1)
+
+    def test_geometry_order_and_bounds_alias(self):
+        results = match_augments([line("Draw Your Sword", 900),
+                                  {"text": "Back To Basics", "bounds": {"x": 100, "y": 200}},
+                                  line("Stats!", 400)], CATALOG)
+        self.assertEqual([m["id"] for m in results], ["basic", "stats", "sword"])
+
+    def test_string_catalog_and_aliases(self):
+        results = match_augments(["Nice Augment"], {12: {"name": "Canonical Name", "aliases": ["Nice Augment"]}})
+        self.assertEqual(results[0]["id"], 12)
+        self.assertEqual(results[0]["name"], "Canonical Name")
+        self.assertEqual(match_augments(["Stats!"], {1: "Stats!"})[0]["id"], 1)
+
+    def test_malformed_lines_are_ignored(self):
+        self.assertEqual(match_augments([None, {}, {"text": 10}], CATALOG), [])
+
+
+class OfferDetectorTests(unittest.TestCase):
+    def test_three_card_row_is_returned_left_to_right(self):
+        results = detect_offers([line("Draw Your Sword", 900), line("Stats!", 500, 205), line("Back To Basics", 100, 199)], CATALOG)
+        self.assertEqual([m["id"] for m in results], ["basic", "stats", "sword"])
+
+    def test_two_cards_supported(self):
+        self.assertEqual(len(detect_offers([line("Stats!", 200), line("Draw Your Sword", 800)], CATALOG)), 2)
+
+    def test_single_title_never_triggers_auto_detection(self):
+        self.assertEqual(detect_offers([line("Draw Your Sword", 500)], CATALOG), [])
+
+    def test_vertical_lookup_list_is_not_offer_row(self):
+        self.assertEqual(detect_offers([line("Stats!", 100, 100), line("Back To Basics", 100, 200), line("Draw Your Sword", 100, 300)], CATALOG), [])
+
+    def test_text_only_matches_require_manual_review(self):
+        self.assertEqual(detect_offers(["Stats!", "Back To Basics", "Draw Your Sword"], CATALOG), [])
+
+    def test_four_matches_on_same_row_are_ambiguous(self):
+        self.assertEqual(detect_offers([line("Stats!", 100), line("Back To Basics", 400), line("Draw Your Sword", 700), line("Windspeaker's Blessing", 1000)], CATALOG), [])
+
+    def test_two_distinct_plausible_rows_are_ambiguous(self):
+        self.assertEqual(detect_offers([line("Stats!", 100), line("Back To Basics", 500), line("Draw Your Sword", 100, 400), line("Windspeaker's Blessing", 500, 400)], CATALOG), [])
+
+    def test_normalized_coordinates_supported(self):
+        results = detect_offers([{"text": "Stats!", "x": .2, "y": .4, "height": .02},
+                                 {"text": "Back To Basics", "x": .6, "y": .405, "height": .02}], CATALOG)
+        self.assertEqual(len(results), 2)
+
+    def test_tightly_overlapping_text_does_not_make_two_cards(self):
+        self.assertEqual(detect_offers([line("Stats!", 100), line("Back To Basics", 110)], CATALOG), [])
+
+
+class WrappedTitleTests(unittest.TestCase):
+    @staticmethod
+    def fragment(text, x, y, width=160, height=24):
+        return {"text": text, "x": x, "y": y, "width": width, "height": height}
+
+    def test_centered_pixel_fragments_form_one_long_title(self):
+        lines = [self.fragment("Windspeaker's", 100, 200, 190),
+                 self.fragment("Blessing", 145, 228, 100)]
+        results = match_augments(lines, CATALOG)
+        self.assertEqual([item["id"] for item in results], ["wind"])
+        self.assertEqual(results[0]["height"], 52)
+
+    def test_normalized_fragments_form_one_long_title(self):
+        lines = [self.fragment("Windspeaker's", .1, .3, .2, .03),
+                 self.fragment("Blessing", .15, .335, .1, .03)]
+        self.assertEqual([item["id"] for item in match_augments(lines, CATALOG)], ["wind"])
+
+    def test_wrapped_title_remains_in_three_card_offer_row(self):
+        lines = [self.fragment("Windspeaker's", 100, 200, 190),
+                 self.fragment("Blessing", 145, 228, 100),
+                 line("Draw Your Sword", 500, 214), line("Back To Basics", 900, 214)]
+        self.assertEqual([item["id"] for item in detect_offers(lines, CATALOG)],
+                         ["wind", "sword", "basic"])
+
+    def test_wrapped_stats_does_not_also_match_shorter_stats(self):
+        lines = [self.fragment("Stats on", 100, 200),
+                 self.fragment("Stats!", 100, 228)]
+        self.assertEqual([item["id"] for item in match_augments(lines, CATALOG)], ["stats2"])
+
+    def test_wrapped_longest_stats_overrides_exact_prefix_fragment(self):
+        lines = [self.fragment("Stats on Stats", 100, 200),
+                 self.fragment("on Stats!", 100, 228)]
+        self.assertEqual([item["id"] for item in match_augments(lines, CATALOG)], ["stats3"])
+
+    def test_three_line_stats_prefers_complete_name(self):
+        lines = [self.fragment("Stats on", 100, 200),
+                 self.fragment("Stats on", 100, 228),
+                 self.fragment("Stats!", 100, 256)]
+        self.assertEqual([item["id"] for item in match_augments(lines, CATALOG)], ["stats3"])
+
+    def test_unrelated_adjacent_text_preserves_exact_original(self):
+        lines = [self.fragment("Stats!", 100, 200),
+                 self.fragment("Gain power", 100, 228)]
+        self.assertEqual([item["id"] for item in match_augments(lines, CATALOG)], ["stats"])
+
+    def test_description_font_does_not_join_into_title(self):
+        lines = [self.fragment("Draw Your", 100, 200),
+                 self.fragment("Sword", 100, 228, height=12)]
+        self.assertEqual(match_augments(lines, CATALOG), [])
+
+    def test_adjacent_cards_are_never_joined(self):
+        lines = [self.fragment("Draw Your", 100, 200),
+                 self.fragment("Sword", 500, 228)]
+        self.assertEqual(match_augments(lines, CATALOG), [])
+
+    def test_distant_vertical_text_is_not_joined(self):
+        lines = [self.fragment("Draw Your", 100, 200),
+                 self.fragment("Sword", 100, 300)]
+        self.assertEqual(match_augments(lines, CATALOG), [])
+
+    def test_intervening_text_prevents_join(self):
+        lines = [self.fragment("Draw Your", 100, 200),
+                 self.fragment("Gain", 100, 225, height=10),
+                 self.fragment("Sword", 100, 238)]
+        self.assertEqual(match_augments(lines, CATALOG), [])
+
+    def test_geometry_is_required_to_join(self):
+        self.assertEqual(match_augments(["Windspeaker's", "Blessing"], CATALOG), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
