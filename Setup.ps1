@@ -1,4 +1,7 @@
-param([string]$InstallPath = (Join-Path $env:USERPROFILE 'MayhemCompanion'))
+param(
+    [string]$InstallPath = (Join-Path $env:USERPROFILE 'MayhemCompanion'),
+    [switch]$StartWithLeague
+)
 $ErrorActionPreference = 'Stop'
 $sourceRoot = $PSScriptRoot
 $pythonCandidates = @(
@@ -26,6 +29,7 @@ New-Item -ItemType Directory -Force -Path $appPath | Out-Null
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'mayhem') -Destination $appPath -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.md') -Destination $InstallPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'Launch.vbs') -Destination $InstallPath -Force
+Copy-Item -LiteralPath (Join-Path $sourceRoot 'Configure-Autostart.vbs') -Destination $InstallPath -Force
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut((Join-Path $desktop 'Mayhem Companion.lnk'))
@@ -35,4 +39,8 @@ $shortcut.WorkingDirectory = $InstallPath
 $shortcut.Description = 'Local ARAM Mayhem champion and augment companion'
 $shortcut.IconLocation = (Join-Path $InstallPath '.venv\Scripts\pythonw.exe') + ',0'
 $shortcut.Save()
+if ($StartWithLeague) {
+    & (Join-Path $env:WINDIR 'System32\cscript.exe') //NoLogo (Join-Path $InstallPath 'Configure-Autostart.vbs') $InstallPath
+    if ($LASTEXITCODE -ne 0) { throw 'Configuring automatic launch failed.' }
+}
 Write-Output "Installed to $InstallPath. Open Mayhem Companion on your desktop."

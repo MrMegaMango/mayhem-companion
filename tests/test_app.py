@@ -1,5 +1,6 @@
 """State regression tests use a fake view; no game interaction or desktop input."""
 import json
+from pathlib import Path
 import queue
 import unittest
 from unittest.mock import Mock, patch
@@ -20,6 +21,8 @@ class StateTests(unittest.TestCase):
         app.requests = queue.Queue()
         app.events = queue.Queue()
         app._closed = app.recovery_visible = False
+        app._autostart_busy = False
+        app.storage = Path("C:/Users/fixture/MayhemCompanion")
         app.champ_var, app.badge, app.stage = Mock(), Mock(), Mock()
         app.status, app.source, app.root = Mock(), Mock(), Mock()
         app.follow = True
@@ -159,6 +162,60 @@ class StateTests(unittest.TestCase):
         app.root.destroy.assert_called_once()
         app.root.after.assert_not_called()
         self.assertEqual(app.events.qsize(), 1)
+
+    def test_start_with_league_configures_on_helper_thread_and_reports_result(self):
+        app = self.make_view()
+        with patch("mayhem.autostart.is_enabled", side_effect=[False, True]), \
+                patch("mayhem.app.threading.Thread") as thread, \
+                patch("mayhem.app.subprocess.run", return_value=Mock(returncode=0)) as run:
+            app.handle_event("tray_action", "toggle_autostart")
+            self.assertTrue(app._autostart_busy)
+            thread.return_value.start.assert_called_once()
+            run.assert_not_called()
+            thread.call_args.kwargs["target"]()
+        command = run.call_args.args[0]
+        self.assertIn("//B", command)
+        self.assertIn(str(app.storage / "Configure-Autostart.vbs"), command)
+        self.assertNotIn("disable", command)
+        self.assertNotIn("-ExecutionPolicy", command)
+        self.assertEqual(app.events.get_nowait(), ("autostart_result", (True, True)))
+        app.handle_event("autostart_result", (True, True))
+        self.assertFalse(app._autostart_busy)
+
+    def test_disable_start_with_league_and_ignore_repeated_click_while_busy(self):
+        app = self.make_view()
+        with patch("mayhem.autostart.is_enabled", side_effect=[True, False]) as enabled, \
+                patch("mayhem.app.threading.Thread") as thread, \
+                patch("mayhem.app.subprocess.run", return_value=Mock(returncode=0)) as run:
+            app.toggle_autostart()
+            app.toggle_autostart()
+            thread.assert_called_once()
+            self.assertEqual(enabled.call_count, 1)
+            thread.call_args.kwargs["target"]()
+        self.assertEqual(run.call_args.args[0][-1], "disable")
+        self.assertEqual(app.events.get_nowait(), ("autostart_result", (True, False)))
+
+    def test_startup_config_failure_is_reported_and_releases_busy_state(self):
+        app = self.make_view()
+        with patch("mayhem.autostart.is_enabled", return_value=False), \
+                patch("mayhem.app.threading.Thread") as thread, \
+                patch("mayhem.app.subprocess.run", side_effect=OSError("fixture")):
+            app.toggle_autostart()
+            thread.call_args.kwargs["target"]()
+        kind, payload = app.events.get_nowait()
+        app.handle_event(kind, payload)
+        self.assertFalse(app._autostart_busy)
+        self.assertIn("Could not change", app.status.set.call_args.args[0])
+
+    def test_automatic_duplicate_launch_exits_without_a_popup(self):
+        from mayhem.app import main
+        fake_ctypes = Mock()
+        fake_ctypes.get_last_error.return_value = 183
+        with patch("mayhem.app.ctypes", fake_ctypes), \
+                patch("sys.argv", ["mayhem", "--auto-start"]), patch("mayhem.app.tk.Tk") as root:
+            main()
+        root.assert_not_called()
+        fake_ctypes.windll.user32.MessageBoxW.assert_not_called()
 
     def test_hidden_on_desktop_lobby_other_modes_and_unknown_mode(self):
         app = self.make_view()

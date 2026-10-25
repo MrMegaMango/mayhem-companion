@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -52,6 +53,7 @@ class Companion:
             self.settings = {}
         self.events, self.requests = queue.Queue(), queue.Queue()
         self._closed = self.recovery_visible = False
+        self._autostart_busy = False
         self.stop = threading.Event()
         self.catalog = None
         self.champion = self.live_champion = None
@@ -467,6 +469,29 @@ class Companion:
             self.visibility_override = None
             self.set_visible(self.auto_visible or self.browse_mode)
 
+    def toggle_autostart(self):
+        if self._autostart_busy:
+            return
+        from .autostart import is_enabled
+        enable = not is_enabled()
+        script = self.storage / "Configure-Autostart.vbs"
+        self._autostart_busy = True
+
+        def configure():
+            command = [str(Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" / "cscript.exe"),
+                       "//B", "//NoLogo", str(script), str(self.storage)]
+            if not enable:
+                command.append("disable")
+            try:
+                result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                        timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                success = result.returncode == 0 and is_enabled() == enable
+            except (OSError, subprocess.SubprocessError):
+                success = False
+            self.events.put(("autostart_result", (success, enable)))
+
+        threading.Thread(target=configure, name="mayhem-startup-setting", daemon=True).start()
+
     def set_visible(self, visible):
         if visible == (not self.hidden):
             return
@@ -532,6 +557,13 @@ class Companion:
                 self.set_manual_visible(False)
             elif payload == "exit":
                 self.close()
+            elif payload == "toggle_autostart":
+                self.toggle_autostart()
+        elif kind == "autostart_result":
+            self._autostart_busy = False
+            success, enabled = payload
+            self.status.set(("Start with League enabled." if enabled else "Start with League disabled.")
+                            if success else "Could not change automatic launch. Check the installed startup script.")
         elif kind in ("tray_status", "hotkeys_failed"):
             self.check_recovery()
         elif kind == "catalog":
@@ -671,6 +703,8 @@ class Companion:
             "Ctrl+Alt+M can open it manually outside a match.\n\n"
             "The M icon in the Windows tray also opens the panel. Right-click it for Show, Hide, or Exit. "
             "Showing from the tray unlocks click-through controls.\n\n"
+            "Start with League in the tray menu enables a small Windows sign-in watcher. "
+            "It launches the companion once when League opens. Exit stays effective until you restart League.\n\n"
             "Use borderless or windowed League. Drag MAYHEM to move the panel outside the augment cards. "
             "Keep League focused for automatic reading. English augment titles are supported.\n\n"
             "Manual lookup: type a champion or augment, choose from the dropdown, then press Enter. "
@@ -710,6 +744,7 @@ class Companion:
 def main():
     parser = argparse.ArgumentParser(description="Local ARAM Mayhem companion")
     parser.add_argument("--browse", action="store_true", help="Start in manual browse mode")
+    parser.add_argument("--auto-start", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     # A second launcher must not create another overlay with unavailable recovery
     # shortcuts. Keep a named mutex alive for this process lifetime.
@@ -720,7 +755,8 @@ def main():
         kernel32.CreateMutexW.restype = ctypes.c_void_p
         instance_mutex = kernel32.CreateMutexW(None, False, "Local\\MayhemCompanion.Personal")
         if ctypes.get_last_error() == 183:
-            ctypes.windll.user32.MessageBoxW(None, "Mayhem Companion is already running.\nUse its M tray icon or Ctrl+Alt+M to open it.", "Mayhem Companion", 0x40)
+            if not args.auto_start:
+                ctypes.windll.user32.MessageBoxW(None, "Mayhem Companion is already running.\nUse its M tray icon or Ctrl+Alt+M to open it.", "Mayhem Companion", 0x40)
             return
     storage = app_dir()
     storage.mkdir(parents=True, exist_ok=True)

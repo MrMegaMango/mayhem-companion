@@ -10,6 +10,8 @@ The companion starts hidden and waits in the background. It appears automaticall
 
 The **M icon in the Windows notification area** remains available while the panel is hidden. Click it to show the panel, or right-click for **Show companion**, **Hide companion**, and **Exit**. Showing from the tray also unlocks click-through controls. Windows may place the icon in its hidden-icons menu. Exit removes the icon and stops the background companion.
 
+Turn on **Start with League** in the tray menu to launch automatically when the League client opens. This installs one shortcut in your own Windows Startup folder: a small watcher starts at sign-in, checks League process names every two seconds, and launches the companion once per League session. Exit stays effective for that session; closing and reopening League starts it again. The watcher also counts an active game so a client closing during a match does not trigger another launch. Turn the tray setting off to remove the startup shortcut and stop the watcher. Setup also accepts `-StartWithLeague`. Outside the app, run `cscript //NoLogo Configure-Autostart.vbs "%USERPROFILE%\MayhemCompanion" disable` from the installed folder to disable it.
+
 - Use **borderless or windowed** League. Exclusive fullscreen is not supported.
 - Keep **Auto scan** checked. **Auto** champion selection follows your champion during champion select and in game, including champion swaps. Manually choosing a champion also works with automatic augment scanning.
 - Keep League focused with the three cards visible while scanning. Switching away pauses the reader and retains the last recognized choices with a paused label. Returning to League resumes scanning; choices clear after the selection disappears or the game ends.
@@ -38,7 +40,7 @@ In-game champion detection uses Riot's documented read-only Live Client Data API
 
 Screen capture runs only when the League game executable is the visible foreground window. Screenshots remain in memory and OCR runs locally. No screenshots, player names, Riot IDs or game histories are uploaded. HTTP requests to ARAMKit identify the public champion ID being looked up, as a normal page lookup would. Cache, window position and error logs are under `%USERPROFILE%\MayhemCompanion`.
 
-The app registers modified hotkeys without keyboard hooks. Nothing is added to Windows startup. Close with ×. To uninstall, close it and delete its installed folder and desktop shortcut.
+The app registers modified hotkeys without keyboard hooks. Automatic launch is a per-user Startup shortcut and needs no administrator access. Close with ×. To uninstall, disable **Start with League**, close the companion, and delete its installed folder and desktop shortcut.
 
 ## Development and verification
 

@@ -26,6 +26,13 @@ def _verified_icon_class(base, native=None):
     native = native or importlib.import_module("pystray._util.win32")
 
     class VerifiedIcon(base):
+        def _on_notify(self, wparam, lparam):
+            # Startup configuration completes asynchronously (and can change
+            # outside the app). Rebuild checkmarks just before opening a menu.
+            if lparam == native.WM_RBUTTONUP:
+                self.update_menu()
+            return super()._on_notify(wparam, lparam)
+
         def _message(self, code, flags, **kwargs):
             result = native.Shell_NotifyIcon(code, native.NOTIFYICONDATAW(
                 cbSize=ctypes.sizeof(native.NOTIFYICONDATAW),
@@ -37,6 +44,14 @@ def _verified_icon_class(base, native=None):
     return VerifiedIcon
 
 
+def _autostart_checked(_item):
+    try:
+        return bool(importlib.import_module("mayhem.autostart").is_enabled())
+    except (ImportError, OSError):
+        logging.debug("Could not read automatic startup status", exc_info=True)
+        return False
+
+
 def _native_icon_factory(on_action):
     # Importing pystray selects an OS backend; keep it out of module import and
     # pure unit tests. Windows supports running Icon.run on a background thread.
@@ -44,6 +59,9 @@ def _native_icon_factory(on_action):
     menu = pystray.Menu(
         pystray.MenuItem("Show companion", lambda _icon, _item: on_action("show"), default=True),
         pystray.MenuItem("Hide companion", lambda _icon, _item: on_action("hide")),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Start with League", lambda _icon, _item: on_action("toggle_autostart"),
+                         checked=_autostart_checked),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Exit", lambda _icon, _item: on_action("exit")),
     )
@@ -56,7 +74,7 @@ class TrayIcon:
     """Nonblocking tray lifecycle, independent of Tk and the game's UI.
 
     Emits ('tray_status', bool) when readiness changes or startup fails, and
-    ('tray_action', 'show'|'hide'|'exit') when a menu/default action is invoked.
+    ('tray_action', 'show'|'hide'|'toggle_autostart'|'exit') for menu/default actions.
     The app must drain these events on its own UI thread. A closed instance is
     not restarted; construct a new one if a later restart is needed.
     """
@@ -86,7 +104,7 @@ class TrayIcon:
 
     def _action(self, action):
         with self._lock:
-            if not self._closed and action in ("show", "hide", "exit"):
+            if not self._closed and action in ("show", "hide", "toggle_autostart", "exit"):
                 self.output.put(("tray_action", action))
 
     @staticmethod

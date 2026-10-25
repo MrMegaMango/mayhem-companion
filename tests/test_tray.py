@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from mayhem.tray import TrayIcon, _native_icon_factory, _verified_icon_class
+from mayhem.tray import TrayIcon, _autostart_checked, _native_icon_factory, _verified_icon_class
 
 
 class FakeIcon:
@@ -48,6 +48,20 @@ class FakeIcon:
 
 
 class TrayTests(unittest.TestCase):
+    def test_windows_menu_rechecks_startup_setting_before_opening(self):
+        calls = []
+        class Base:
+            def update_menu(self):
+                calls.append("refresh")
+            def _on_notify(self, wparam, lparam):
+                calls.append("open")
+        icon = _verified_icon_class(Base, SimpleNamespace(WM_RBUTTONUP=516))()
+        icon._on_notify(0, 516)
+        self.assertEqual(calls, ["refresh", "open"])
+        calls.clear()
+        icon._on_notify(0, 514)
+        self.assertEqual(calls, ["open"])
+
     def make_tray(self, icon=None):
         events = queue.Queue()
         icon = icon or FakeIcon()
@@ -71,7 +85,7 @@ class TrayTests(unittest.TestCase):
         tray, icon, events = self.make_tray()
         tray.start()
         self.assertEqual(events.get(timeout=1), ("tray_status", True))
-        for action in ("show", "hide", "exit"):
+        for action in ("show", "hide", "toggle_autostart", "exit"):
             icon.actions(action)
             self.assertEqual(events.get(timeout=1), ("tray_action", action))
         self.assertTrue(icon.visible)
@@ -95,7 +109,8 @@ class TrayTests(unittest.TestCase):
         events.get(timeout=1)
         tray.close()
         events.get(timeout=1)
-        icon.actions("show")
+        for action in ("show", "toggle_autostart"):
+            icon.actions(action)
         self.assertTrue(events.empty())
 
     def test_close_before_start_never_constructs_an_icon(self):
@@ -200,13 +215,31 @@ class TrayTests(unittest.TestCase):
             _native_icon_factory(action)
         options = fake.Icon.call_args.kwargs
         entries = options["menu"].items
-        self.assertEqual([entries[i].text for i in (0, 1, 3)], ["Show companion", "Hide companion", "Exit"])
+        self.assertEqual([entries[i].text for i in (0, 1, 3, 5)],
+                         ["Show companion", "Hide companion", "Start with League", "Exit"])
         self.assertTrue(entries[0].default)
         self.assertIs(entries[2], Menu.SEPARATOR)
-        for index in (0, 1, 3):
+        self.assertIs(entries[4], Menu.SEPARATOR)
+        self.assertIs(entries[3].checked, _autostart_checked)
+        for index in (0, 1, 3, 5):
             entries[index].action(None, None)
-        self.assertEqual([call.args[0] for call in action.call_args_list], ["show", "hide", "exit"])
+        self.assertEqual([call.args[0] for call in action.call_args_list],
+                         ["show", "hide", "toggle_autostart", "exit"])
         self.assertEqual(options["icon"].size, (64, 64))
+
+    def test_autostart_checked_reads_current_configuration_each_time(self):
+        module = SimpleNamespace(is_enabled=Mock(side_effect=[False, True]))
+        with patch("mayhem.tray.importlib.import_module", return_value=module) as loader:
+            self.assertFalse(_autostart_checked(None))
+            self.assertTrue(_autostart_checked(None))
+        self.assertEqual(module.is_enabled.call_count, 2)
+        loader.assert_called_with("mayhem.autostart")
+
+    def test_autostart_checked_handles_missing_or_unreadable_configuration(self):
+        for error in (ImportError("missing"), OSError("unreadable")):
+            with self.subTest(error=error), \
+                    patch("mayhem.tray.importlib.import_module", side_effect=error):
+                self.assertFalse(_autostart_checked(None))
 
     def test_native_add_failure_raises_but_cleanup_failure_does_not(self):
         class NotifyData(ctypes.Structure):
