@@ -59,6 +59,10 @@ class Companion:
         self.augment_names, self.champion_names = [], []
         self.augment_by_name = {}
         self.drag_start = None
+        self.spell_token = 0
+        self.spell_champion = None
+        self.spell_data = None
+        self.live_spells = []
         self.build()
         self.hotkeys = Hotkeys(root, {101: (ord("M"), self.toggle_visible),
                                      102: (ord("S"), self.rescan),
@@ -121,7 +125,18 @@ class Companion:
         self.champ_box.bind("<Return>", self.select_champion)
         self.champ_box.bind("<KeyRelease>", self.filter_champions)
         self.button(champ_row, "Auto", self.auto_champion).pack(side="right", padx=(8, 0))
-        controls = tk.Frame(self.body, bg=BG)
+        tabs = tk.Frame(self.body, bg=BG)
+        tabs.pack(fill="x", pady=(0, 8))
+        self.view = tk.StringVar(value="augments")
+        self.augment_tab = self.button(tabs, "Augments", lambda: self.switch_view("augments"), FIELD)
+        self.augment_tab.pack(side="left", fill="x", expand=True)
+        self.spells_tab = self.button(tabs, "Spells", lambda: self.switch_view("spells"), BG)
+        self.spells_tab.pack(side="left", fill="x", expand=True)
+        self.pages = tk.Frame(self.body, bg=BG)
+        self.pages.pack(fill="both", expand=True)
+        self.augment_panel = tk.Frame(self.pages, bg=BG)
+        self.augment_panel.pack(fill="both", expand=True)
+        controls = tk.Frame(self.augment_panel, bg=BG)
         controls.pack(fill="x", pady=(0, 10))
         self.stage = tk.StringVar(value="All picks")
         stage_box = ttk.Combobox(controls, textvariable=self.stage, state="readonly", width=10,
@@ -147,7 +162,7 @@ class Companion:
         root.option_add("*TCombobox*Listbox.selectBackground", "#36516a")
         root.option_add("*TCombobox*Listbox.font", "{Segoe UI} 10")
         for index in range(3):
-            card = tk.Frame(self.body, bg=PANEL, padx=12, pady=10)
+            card = tk.Frame(self.augment_panel, bg=PANEL, padx=12, pady=10)
             card.pack(fill="x", pady=(0, 8))
             top = tk.Frame(card, bg=PANEL)
             top.pack(fill="x")
@@ -165,6 +180,7 @@ class Companion:
             metadata = self.label(row, "Choose an augment", 9, MUTED, anchor="e", justify="right")
             metadata.pack(side="right", fill="x", expand=True)
             self.cards.append({"var": name, "box": box, "value": value, "meta": metadata})
+        self.build_spells(style)
         self.status = tk.StringVar(value="Loading augment data…")
         self.label(self.body, size=9, color=MUTED, textvariable=self.status,
                    wraplength=398, anchor="w", justify="left").pack(fill="x", pady=(2, 6))
@@ -240,6 +256,7 @@ class Companion:
         self.lookup()
 
     def lookup(self):
+        self.lookup_spells()
         self.token += 1
         for ident, card in zip(self.offer_ids, self.cards):
             card["value"].configure(text="—", fg=TEXT)
@@ -249,6 +266,131 @@ class Companion:
             return
         stage = None if self.stage.get() == "All picks" else int(self.stage.get().split()[-1])
         self.requests.put(("lookup", (self.token, self.champion, list(self.offer_ids), stage)))
+
+    def build_spells(self, style):
+        self.spell_panel = tk.Frame(self.pages, bg=BG)
+        toolbar = tk.Frame(self.spell_panel, bg=BG)
+        toolbar.pack(fill="x", pady=(0, 8))
+        self.label(toolbar, "Spell pairs", 10, TEXT, True).pack(side="left")
+        self.spell_sort = tk.StringVar(value="Win rate")
+        sort_box = ttk.Combobox(toolbar, textvariable=self.spell_sort, state="readonly", width=10,
+                               values=["Win rate", "Games", "Pick rate"])
+        sort_box.pack(side="right")
+        sort_box.bind("<<ComboboxSelected>>", lambda _: self.render_spells())
+        self.spell_summary = tk.StringVar(value="Choose a champion to see spell-pair win rates.")
+        self.label(self.spell_panel, size=9, color=MUTED, textvariable=self.spell_summary,
+                   wraplength=398, justify="left", anchor="w").pack(fill="x", pady=(0, 8))
+        style.configure("Spells.Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT,
+                        borderwidth=0, rowheight=40, font=("Segoe UI", 9))
+        style.configure("Spells.Treeview.Heading", background=FIELD, foreground=MUTED,
+                        font=("Segoe UI", 8), relief="flat")
+        style.map("Spells.Treeview", background=[("selected", "#30425b")], foreground=[("selected", TEXT)])
+        table = tk.Frame(self.spell_panel, bg=BG)
+        table.pack(fill="both", expand=True)
+        self.spell_tree = ttk.Treeview(table, columns=("pair", "win", "games", "pick"),
+                                      show="headings", height=7, style="Spells.Treeview", selectmode="none")
+        for key, title, width in [("pair", "PAIR", 160), ("win", "WIN %", 67),
+                                  ("games", "GAMES", 75), ("pick", "PICK %", 65)]:
+            self.spell_tree.heading(key, text=title)
+            self.spell_tree.column(key, width=width, minwidth=40, anchor="w" if key == "pair" else "e")
+        self.spell_tree.tag_configure("current", background="#203c36", foreground=ACCENT)
+        self.spell_tree.tag_configure("low_sample", foreground=AMBER)
+        scrollbar = ttk.Scrollbar(table, orient="vertical", command=self.spell_tree.yview)
+        self.spell_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self.spell_tree.pack(side="left", fill="both", expand=True)
+        self.spell_note = tk.StringVar(value="")
+        self.label(self.spell_panel, size=8, color=MUTED, textvariable=self.spell_note,
+                   anchor="w").pack(fill="x", pady=(7, 0))
+
+    def switch_view(self, view):
+        self.view.set(view)
+        self.augment_panel.pack_forget()
+        self.spell_panel.pack_forget()
+        (self.spell_panel if view == "spells" else self.augment_panel).pack(fill="both", expand=True)
+        self.augment_tab.configure(bg=FIELD if view == "augments" else BG)
+        self.spells_tab.configure(bg=FIELD if view == "spells" else BG)
+        if view == "spells":
+            self.lookup_spells()
+            self.render_spells()
+        else:
+            self.lookup()
+        self.root.after_idle(self.fit_window)
+
+    def fit_window(self):
+        self.root.update_idletasks()
+        height = min(self.shell.winfo_reqheight(), self.root.winfo_screenheight() - 60)
+        y = max(0, min(self.root.winfo_y(), self.root.winfo_screenheight() - height - 40))
+        self.root.geometry(f"440x{height}+{self.root.winfo_x()}+{y}")
+
+    def lookup_spells(self, force=False):
+        if not force and self.spell_champion == self.champion:
+            return
+        self.spell_token += 1
+        self.spell_champion = self.champion
+        self.spell_data = None
+        self.spell_tree.delete(*self.spell_tree.get_children())
+        self.spell_note.set("")
+        self.spell_summary.set("Loading spell pairs…" if self.champion else "Choose a champion to see spell-pair win rates.")
+        if self.champion:
+            self.requests.put(("spells", (self.spell_token, self.champion)))
+
+    def render_spells(self):
+        self.spell_tree.delete(*self.spell_tree.get_children())
+        self.update_spell_status()
+        if self.spell_data is None:
+            return
+        rows = list(self.spell_data["rows"])
+        self.spell_tree.configure(height=max(1, min(len(rows), 8)))
+        self.root.after_idle(self.fit_window)
+        if not rows:
+            self.spell_summary.set("No spell-pair data for this champion.")
+            self.spell_note.set("")
+            self.update_source(self.spell_data)
+            return
+        sort_key = {"Win rate": "win_rate", "Games": "sample_count", "Pick rate": "pick_rate"}[self.spell_sort.get()]
+        rows.sort(key=lambda row: (row.get(sort_key) if row.get(sort_key) is not None else -1,
+                                   row["sample_count"]), reverse=True)
+        live_ids = [spell.get("id") for spell in self.live_spells]
+        current = tuple(sorted(str(ident) for ident in live_ids)) if len(live_ids) == 2 and all(live_ids) else ()
+        highlight = self.game_live and self.champion == self.live_champion and len(set(current)) == 2
+        matched = False
+        for index, row in enumerate(rows):
+            is_current = highlight and tuple(sorted(row["spell_ids"])) == current
+            matched = matched or is_current
+            pair = " + ".join(row["spell_names"])
+            count, rate, pick = row["sample_count"], row["win_rate"], row.get("pick_rate")
+            low = count < 200
+            tags = ("current",) if is_current else (("low_sample",) if low else ())
+            self.spell_tree.insert("", "end", iid=str(index), values=(
+                ("● " if is_current else "") + pair,
+                f"{rate * 100:.1f}" if rate is not None and count else "—",
+                compact_count(count) + ("*" if low else ""),
+                f"{pick * 100:.1f}" if pick is not None else "—"), tags=tags)
+        if highlight:
+            self.spell_summary.set("● Your current pair" if matched else "Your current pair is not in this sample.")
+        else:
+            self.spell_summary.set(f"{len(rows)} pairs · champion-specific win rates")
+        notes = []
+        if any(row["sample_count"] < 200 for row in rows):
+            notes.append("* Fewer than 200 games")
+        if self.spell_data.get("stale"):
+            notes.append("Cached data")
+        self.spell_note.set(" · ".join(notes))
+        self.update_source(self.spell_data)
+
+    def update_spell_status(self):
+        if not self.champion:
+            self.status.set("Choose a champion or wait for a game.")
+        elif self.game_live and self.champion == self.live_champion:
+            names = [spell.get("name") for spell in self.live_spells if spell.get("name")]
+            self.status.set("Live · " + " + ".join(names) if names else "Live champion detected")
+        else:
+            self.status.set("Browsing spell pairs for the selected champion")
+
+    def update_source(self, metadata):
+        marker = " · cached/offline" if metadata.get("stale") else ""
+        self.source.set(f"ARAMKit · {metadata.get('version', '')} · {metadata.get('data_date', '')}{marker}")
 
     def clear_offers(self):
         self.offer_ids = [None, None, None]
@@ -313,6 +455,7 @@ class Companion:
             marker = " · cached/offline" if payload.get("stale") else ""
             self.source.set(f"ARAMKit · {payload.get('version', '')} · {payload.get('data_date', '')}{marker}")
             self.status.set("Waiting for a game. You can also browse a champion and augments.")
+            self.lookup_spells(force=True)
         elif kind == "game":
             self.handle_game(payload)
         elif kind == "offers":
@@ -332,6 +475,18 @@ class Companion:
             token, rates = payload
             if token == self.token:
                 self.render_rates(rates)
+        elif kind == "spells":
+            token, data = payload
+            if token == self.spell_token and str(data.get("champion_id")) == self.champion:
+                self.spell_data = data
+                if self.view.get() == "spells":
+                    self.render_spells()
+        elif kind == "spells_error":
+            token, error = payload
+            if token == self.spell_token:
+                self.spell_data = None
+                self.spell_summary.set("Spell data unavailable. Use Retry data.")
+                self.spell_note.set(str(error)[:80])
         elif kind == "lookup_error":
             token, error = payload
             if token == self.token:
@@ -340,13 +495,15 @@ class Companion:
                     card["meta"].configure(text="Data unavailable", fg=AMBER)
                 self.status.set(error[:180])
         elif kind == "scan_status":
-            if self.auto.get() and not self.is_auto_offer and not self.locked:
+            if self.view.get() == "augments" and self.auto.get() and not self.is_auto_offer and not self.locked:
                 self.status.set(payload or "Watching for augment choices…")
         elif kind == "error":
             self.status.set(str(payload)[:180])
 
     def handle_game(self, game):
         self.game_live = game.get("status") == "live"
+        previous_spells = self.live_spells
+        self.live_spells = game.get("summoner_spells", []) if self.game_live else []
         ident = None
         if self.game_live and self.catalog:
             ident = resolve_champion_id(game.get("raw_champion") or game.get("champion_name") or "",
@@ -364,12 +521,15 @@ class Companion:
             self.badge.configure(text="LIVE" if ident else "WAITING", fg=ACCENT if ident else MUTED)
             if not self.game_live and not self.locked:
                 self.status.set("Waiting for a game. Choose a champion to browse now.")
+        if (changed or previous_spells != self.live_spells) and self.view.get() == "spells":
+            self.render_spells()
+        elif self.view.get() == "spells":
+            self.update_spell_status()
 
     def render_rates(self, rates):
         metadata = next((rate for rate in rates if rate), None)
-        if metadata:
-            marker = " · cached/offline" if metadata.get("stale") else ""
-            self.source.set(f"ARAMKit · {metadata.get('version', '')} · {metadata.get('data_date', '')}{marker}")
+        if metadata and self.view.get() == "augments":
+            self.update_source(metadata)
         for rate, card in zip(rates, self.cards):
             if not rate:
                 continue
@@ -404,6 +564,8 @@ class Companion:
             "Keep League focused for automatic reading. English augment titles are supported.\n\n"
             "Manual lookup: type a champion or augment, choose from the dropdown, then press Enter. "
             "Auto returns to your live champion. Pick filters are manual; All picks is the default.\n\n"
+            "Spells shows champion-specific spell-pair rates, game counts and pick rates. "
+            "Your current pair is highlighted when detected. These are pair statistics, not individual-spell rates.\n\n"
             "Rates come from ARAMKit's third-party sample, not all servers. Low samples are marked; "
             "missing champion data stays blank. Screenshots stay in memory on this computer.\n\n"
             "Riot's developer policy prohibits augment win-rate displays in apps and overlays. "

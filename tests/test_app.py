@@ -24,6 +24,17 @@ class StateTests(unittest.TestCase):
         app.is_auto_offer = True
         app.offer_ids = ["1", "2", "3"]
         app.cards = [{"var": Mock(), "value": Mock(), "meta": Mock()} for _ in range(3)]
+        app.spell_token = 7
+        app.spell_champion = "157"
+        app.spell_data = None
+        app.live_spells = []
+        app.spell_tree = Mock()
+        app.spell_tree.get_children.return_value = []
+        app.spell_summary, app.spell_note = Mock(), Mock()
+        app.spell_sort = Mock()
+        app.spell_sort.get.return_value = "Win rate"
+        app.view = Mock()
+        app.view.get.return_value = "augments"
         return app
 
     def test_game_updates_resolve_locally_without_http(self):
@@ -68,6 +79,64 @@ class StateTests(unittest.TestCase):
                           {"win_rate": 0.0, "sample_count": 20}, None])
         app.cards[0]["value"].configure.assert_called_with(text="—", fg="#9aacc4")
         app.cards[1]["value"].configure.assert_called_with(text="0.0%", fg="#edf4ff")
+
+    def test_champion_change_fetches_spells_without_any_augment_selected(self):
+        app = self.make_view()
+        app.offer_ids = [None] * 3
+        app.champion = "41"
+        app.lookup()
+        self.assertEqual(app.requests.get_nowait(), ("spells", (8, "41")))
+        app.lookup()
+        self.assertTrue(app.requests.empty())
+
+    def test_champion_edit_clears_spells_and_invalidates_inflight_result(self):
+        app = self.make_view()
+        app.champion = None
+        app.lookup_spells()
+        self.assertEqual(app.spell_token, 8)
+        app.handle_event("spells", (7, {"champion_id": "157", "rows": []}))
+        self.assertIsNone(app.spell_data)
+        app.spell_tree.delete.assert_called_once()
+
+    def test_spell_response_must_match_champion_and_request(self):
+        app = self.make_view()
+        app.render_spells = Mock()
+        app.view.get.return_value = "spells"
+        app.handle_event("spells", (7, {"champion_id": "41", "rows": []}))
+        app.render_spells.assert_not_called()
+        app.handle_event("spells", (7, {"champion_id": "157", "rows": []}))
+        app.render_spells.assert_called_once()
+
+    def test_spell_pairs_highlight_order_independently_and_mark_low_sample(self):
+        app = self.make_view()
+        app.live_spells = [{"id": "32"}, {"id": "4"}]
+        app.spell_data = {"rows": [
+            {"spell_ids": ["4", "32"], "spell_names": ["Flash", "Mark"], "win_rate": .58, "sample_count": 1000, "pick_rate": .9},
+            {"spell_ids": ["4", "6"], "spell_names": ["Flash", "Ghost"], "win_rate": .75, "sample_count": 4, "pick_rate": .001},
+        ]}
+        app.render_spells()
+        inserts = app.spell_tree.insert.call_args_list
+        self.assertEqual(inserts[0].kwargs["values"][0], "Flash + Ghost")
+        self.assertEqual(inserts[0].kwargs["values"][2], "4*")
+        self.assertEqual(inserts[1].kwargs["tags"], ("current",))
+        self.assertIn("Your current pair", app.spell_summary.set.call_args.args[0])
+
+    def test_spell_zero_samples_are_blank_and_unknown_pair_does_not_highlight(self):
+        app = self.make_view()
+        app.live_spells = [{"id": None}, {"id": "4"}]
+        app.spell_data = {"rows": [
+            {"spell_ids": ["4", "6"], "spell_names": ["Flash", "Ghost"], "win_rate": None, "sample_count": 0, "pick_rate": None},
+        ]}
+        app.render_spells()
+        result = app.spell_tree.insert.call_args.kwargs
+        self.assertEqual(result["values"][1], "—")
+        self.assertNotIn("current", result["tags"])
+
+    def test_background_augment_response_does_not_replace_spells_source_date(self):
+        app = self.make_view()
+        app.view.get.return_value = "spells"
+        app.render_rates([{"win_rate": .5, "sample_count": 200, "version": "old"}])
+        app.source.set.assert_not_called()
 
 
 if __name__ == "__main__":

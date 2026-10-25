@@ -167,6 +167,57 @@ def _detail(data: object, champion_id: str) -> dict:
     return data
 
 
+def _summoner_pairs(detail: dict) -> list[dict]:
+    """Validate paired observations without attributing them to either spell."""
+    rows = detail.get("summoners", [])
+    if not isinstance(rows, list):
+        raise DataUnavailableError("Invalid ARAMKit summoner spell pairs")
+    parsed, seen = [], set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise DataUnavailableError("Invalid ARAMKit summoner spell row")
+        spells = row.get("spells")
+        if not isinstance(spells, list) or len(spells) != 2:
+            raise DataUnavailableError("ARAMKit summoner statistics must describe a pair")
+        try:
+            ids = [_identifier(spell.get("id")) for spell in spells if isinstance(spell, dict)]
+        except ValueError as error:
+            raise DataUnavailableError("Invalid ARAMKit summoner spell ID") from error
+        if len(ids) != 2 or ids[0] == ids[1]:
+            raise DataUnavailableError("Invalid ARAMKit summoner spell pair")
+        pair = tuple(sorted(ids))
+        if pair in seen:
+            raise DataUnavailableError("Duplicate ARAMKit summoner spell pair")
+        seen.add(pair)
+        count = _count(row.get("sampleCount"))
+        win_rate = _rate(row.get("winRate"), optional=True)
+        pick_rate = _rate(row.get("pickRate"), optional=True)
+        parsed.append({
+            "spell_ids": ids,
+            "win_rate": win_rate if count else None,
+            "sample_count": count,
+            "pick_rate": pick_rate,
+            "low_sample": count < 200,
+        })
+    return parsed
+
+
+def _summoner_resource(data: object) -> dict:
+    data = _catalog_resource(data)
+    if any(not row["name"].strip() for row in data.values()):
+        raise DataUnavailableError("ARAMKit summoner spell names are missing")
+    return data
+
+
+def _named_summoner_pairs(rows: list[dict], resources: dict) -> list[dict]:
+    named = []
+    for row in rows:
+        if any(spell_id not in resources for spell_id in row["spell_ids"]):
+            raise DataUnavailableError("ARAMKit summoner spell names do not match the statistics")
+        named.append({**row, "spell_names": [resources[spell_id]["name"] for spell_id in row["spell_ids"]]})
+    return named
+
+
 class StatsProvider:
     """Public ARAMKit data with daily discovery and immutable snapshot caching.
 
@@ -184,6 +235,7 @@ class StatsProvider:
         self._active_version: dict | None = None
         self._detail_meta: dict[tuple[str, str], dict] = {}
         self._details: dict[tuple[str, str], dict] = {}
+        self._summoner_fallbacks: dict[tuple[str, str], dict] = {}
 
     def _cache_path(self, url: str) -> Path:
         return self.cache_dir / (hashlib.sha256(url.encode()).hexdigest() + ".json")
@@ -400,3 +452,80 @@ class StatsProvider:
             "low_sample": count < 200,
             "source_url": self.source_url(champion_id),
         }
+
+    def _last_summoner_pairs(self, champion_id: str, bracket: str) -> tuple[list[dict], dict] | None:
+        """Load an entire earlier snapshot; never attach old names to new rates."""
+        version = self._read_json(self.cache_dir / f"last-summoners-{champion_id}-{bracket}.json")
+        try:
+            _version_row(version)
+        except DataUnavailableError:
+            return None
+        cached = self._cached(
+            self._detail_url(version, champion_id, bracket),
+            lambda data: _detail(data, champion_id),
+        )
+        if cached is None:
+            return None
+        try:
+            rows = _summoner_pairs(cached["data"])
+            if not rows:
+                return [], version
+            resources = self._cached(self._resource_url(version, "summoner-spells"), _summoner_resource)
+            if resources is None:
+                return None
+            return _named_summoner_pairs(rows, resources["data"]), version
+        except DataUnavailableError:
+            return None
+
+    def summoner_spells_for(self, champion_id: object, bracket: str = "all") -> dict:
+        """Return champion-specific spell-pair rates and their matching names.
+
+        Spell resources are fetched only by this method and use the exact
+        resource version associated with the champion statistics. An empty list
+        means no pair observations; unavailable or malformed data raises instead.
+        """
+        champion_id = _identifier(champion_id)
+        detail = self.champion_detail(champion_id, bracket)
+        key = (champion_id, bracket)
+        version = self._details[key]["version"]
+        requested_url = self._detail_url(version, champion_id, bracket)
+        fallback = self._summoner_fallbacks.get(key)
+        if (
+            fallback is not None and fallback["requested_url"] == requested_url
+            and time.time() < fallback["retry_at"]
+        ):
+            return copy.deepcopy(fallback["result"])
+
+        rows = _summoner_pairs(detail)
+        stale = self._detail_meta[key]["stale"]
+        used_version = version
+        try:
+            if rows:
+                resources, resource_stale = self._fetch(
+                    self._resource_url(version, "summoner-spells"), _summoner_resource,
+                )
+                rows = _named_summoner_pairs(rows, resources)
+                stale = stale or resource_stale
+            self._write_json(self.cache_dir / f"last-summoners-{champion_id}-{bracket}.json", version)
+            self._summoner_fallbacks.pop(key, None)
+        except DataUnavailableError as error:
+            previous = self._last_summoner_pairs(champion_id, bracket) if error.transient else None
+            if previous is None:
+                raise
+            rows, used_version = previous
+            stale = True
+
+        result = {
+            **self._metadata(used_version, stale),
+            "source_url": self.source_url(champion_id),
+            "champion_id": champion_id,
+            "scope": "champion",
+            "bracket": bracket,
+            "rows": rows,
+        }
+        if used_version != version:
+            self._summoner_fallbacks[key] = {
+                "requested_url": requested_url, "retry_at": time.time() + RETRY_DELAY,
+                "result": copy.deepcopy(result),
+            }
+        return result

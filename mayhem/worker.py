@@ -55,6 +55,12 @@ class Worker(threading.Thread):
                             self.emit("rates", (token, rates))
                         except Exception as exc:
                             self.emit("lookup_error", (token, str(exc)))
+                    elif task == "spells":
+                        token, champion = payload
+                        try:
+                            self.emit("spells", (token, self.provider.summoner_spells_for(champion)))
+                        except Exception as exc:
+                            self.emit("spells_error", (token, str(exc)))
             except queue.Empty:
                 pass
             except Exception as exc:

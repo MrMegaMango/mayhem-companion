@@ -1,6 +1,6 @@
 # Mayhem Companion
 
-A personal Windows prototype that reads your current League champion and the visible ARAM Mayhem augment titles, then shows that champion's win rate with each augment from ARAMKit.
+A personal Windows prototype that reads your current League champion and the visible ARAM Mayhem augment titles, then shows that champion's augment and summoner-spell-pair win rates from ARAMKit.
 
 ## Start
 
@@ -11,6 +11,7 @@ Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows t
 - Move the panel by dragging **MAYHEM**. Keep it away from the three augment cards.
 - **Ctrl+Alt+M** shows/hides the panel. **Ctrl+Alt+L** toggles click-through. **Ctrl+Alt+S** resumes/rescans.
 - If OCR misses a choice, type its name in a dropdown and press Enter. Choose a champion manually to browse outside a match. **Auto** returns to live detection.
+- Open **Spells** to compare that champion's summoner-spell pairs by win rate, game count, or pick rate. Your current pair is highlighted when League exposes it. The statistics describe pairs (for example, Flash + Mark), not individual spells. Before a match, select a champion manually to compare pairs; the companion does not change your spells.
 - **All picks** shows the champion's overall augment statistics. Pick 1–4 filters are manual because level alone cannot reliably identify pending selections or extra-augment mechanics. Additional picks use All picks.
 - English augment titles are supported. Native Windows English OCR must be installed. OCR never chooses an augment or presses an in-game button.
 
@@ -18,7 +19,7 @@ Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows t
 
 Data source: [ARAMKit](https://aramkit.com/en-US), using its public version manifest, champion/augment catalogs and the currently selected champion's stats. The app downloads only catalog data and requested champions, caches immutable snapshots, and checks the manifest at most daily. No key or account is needed.
 
-Rates are **champion + augment**, not global augment rates. Missing champion data is blank. Samples below 200 games are marked. Cached fallback data retains its original patch/date and is labeled. The rates reflect ARAMKit's sample, not all regions; collection/provenance claims belong to that provider. Source attribution is clickable in the panel. Respect [ARAMKit's terms](https://aramkit.com/en-US/terms); this is for personal, noncommercial use, not bulk redistribution of its data.
+Rates are **champion + augment** or **champion + spell pair**, never global rates substituted for missing champion data. Missing data is blank; unavailable pairs are not invented. Samples below 200 games are marked (an asterisk in the Spells table). Cached fallback data retains its original patch/date and is labeled. The rates reflect ARAMKit's sample, not all regions; collection/provenance claims belong to that provider. Source attribution is clickable in the panel. Respect [ARAMKit's terms](https://aramkit.com/en-US/terms); this is for personal, noncommercial use, not bulk redistribution of its data.
 
 Riot's [developer policy](https://developer.riotgames.com/docs/lol#game-policy) lists augment win-rate displays in websites, applications and overlays as an unapproved use case. The wording refers to augments broadly without specifically naming Mayhem. This personal prototype is not Riot-approved; applying that restriction to Mayhem is a reasonable reading of the text, not a separate Mayhem-specific ruling verified by this project. No claim is made about enforcement, account bans, or guaranteed account safety.
 
@@ -42,6 +43,6 @@ python -m mayhem --browse
 
 Python under WSL cannot use the Windows OCR API or reach League's Windows loopback API by default. Use Windows Python for the app; pure unit tests can run in either environment.
 
-Checks cover source validation/caching, champion matching, wrong-player rejection, OCR title ambiguity and layout, and failure states. Native English OCR was also tested using synthetic title images. **A real Mayhem augment selection has not yet been tested on this installation.** OCR may miss stylized/wrapped titles or unusual display layouts; use the manual dropdown fallback.
+Checks cover source validation/caching, champion matching, wrong-player rejection, spell-pair validation/current-pair matching, stale-response handling, OCR title ambiguity and layout, and failure states. Native English OCR was also tested using synthetic title images; spell detection was verified against a live game's local API. **A real Mayhem augment selection has not yet been tested on this installation.** OCR may miss stylized/wrapped titles or unusual display layouts; use the manual dropdown fallback.
 
 Mayhem Companion is not endorsed by Riot Games and does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.

@@ -10,6 +10,7 @@ import json
 import math
 import socket
 import ssl
+import unicodedata
 from typing import Any, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
@@ -87,11 +88,76 @@ def resolve_active_player(name: str, players: Sequence[Mapping[str, Any]]) -> Ma
     return matches[0] if len(matches) == 1 else None
 
 
+# Canonical IDs verified against Riot Data Dragon 16.21.1 summoner.json.
+# Similar names do not make Arena/URF spells equivalent to ordinary spells.
+_SPELLS_BY_RAW_ID = {
+    "SummonerBarrier": ("21", "Barrier"),
+    "SummonerBoost": ("1", "Cleanse"),
+    "SummonerDot": ("14", "Ignite"),
+    "SummonerExhaust": ("3", "Exhaust"),
+    "SummonerFlash": ("4", "Flash"),
+    "SummonerHaste": ("6", "Ghost"),
+    "SummonerHeal": ("7", "Heal"),
+    "SummonerMana": ("13", "Clarity"),
+    "SummonerSmite": ("11", "Smite"),
+    "SummonerSnowball": ("32", "Mark"),
+    "SummonerTeleport": ("12", "Teleport"),
+    "SummonerCherryFlash": ("2202", "Flash"),
+    "SummonerSnowURFSnowball_Mark": ("39", "Mark"),
+}
+# Only ordinary canonical names are eligible for this Mayhem name fallback.
+# Unknown raw tokens never fall back, avoiding incorrect variant equivalences.
+_SPELL_IDS_BY_NAME = {
+    "barrier": "21", "cleanse": "1", "ignite": "14", "exhaust": "3",
+    "flash": "4", "ghost": "6", "heal": "7", "clarity": "13",
+    "smite": "11", "mark": "32", "teleport": "12",
+}
+_RAW_SPELL_PREFIX = "GeneratedTip_SummonerSpell_"
+_RAW_SPELL_SUFFIX = "_DisplayName"
+
+
+def _normalized_spell_name(name: str) -> str:
+    return "".join(char for char in unicodedata.normalize("NFKC", name).casefold()
+                   if char.isalnum())
+
+
+def _summoner_spells(player: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return at most two whitelisted spell objects in player slot order.
+
+    The existing playerlist response contains summonerSpellOne/Two; no extra
+    requests are needed. Missing entries do not invalidate champion detection.
+    """
+    spells = player.get("summonerSpells")
+    if not isinstance(spells, Mapping):
+        return []
+    result = []
+    for slot in ("summonerSpellOne", "summonerSpellTwo"):
+        entry = spells.get(slot)
+        if not isinstance(entry, Mapping):
+            continue
+        name = _text(entry.get("displayName"))
+        raw_name = _text(entry.get("rawDisplayName"))
+        if not name and not raw_name:
+            continue
+        raw_id = raw_name
+        if raw_name.startswith(_RAW_SPELL_PREFIX) and raw_name.endswith(_RAW_SPELL_SUFFIX):
+            raw_id = raw_name[len(_RAW_SPELL_PREFIX):-len(_RAW_SPELL_SUFFIX)]
+        canonical = _SPELLS_BY_RAW_ID.get(raw_id)
+        if canonical is not None:
+            identifier, fallback_name = canonical
+            name = name or fallback_name
+        elif not raw_name:
+            identifier = _SPELL_IDS_BY_NAME.get(_normalized_spell_name(name))
+        else:
+            identifier = None
+        result.append({"id": identifier, "name": name or raw_name, "raw_name": raw_name or None})
+    return result
+
 def _state(status: str, message: str) -> dict[str, Any]:
     return {
         "status": status, "champion_id": None, "champion_name": None,
         "raw_champion": None, "level": None, "game_mode": None,
-        "game_time": None, "message": message,
+        "game_time": None, "summoner_spells": [], "message": message,
     }
 
 
@@ -106,7 +172,7 @@ def poll_active_player(timeout: float = 1.0) -> dict[str, Any]:
 
     Numeric champion IDs are not supplied by this API, so champion_id is None.
     The caller may resolve champion_name/raw_champion using its static catalog.
-    No names, Riot IDs, team rosters, or raw API errors appear in this result.
+    No player names, Riot IDs, team rosters, or raw API errors appear in this result.
     """
     if not isinstance(timeout, (int, float)) or not 0 < timeout <= 10:
         raise ValueError("timeout must be greater than zero and at most 10 seconds")
@@ -127,6 +193,7 @@ def poll_active_player(timeout: float = 1.0) -> dict[str, Any]:
         result = _state("live", "Champion detected.")
         result["champion_name"] = champion_name
         result["raw_champion"] = raw_champion or None
+        result["summoner_spells"] = _summoner_spells(player)
         level = _finite_number(player.get("level"))
         result["level"] = int(level) if level is not None and 1 <= level <= 30 and level.is_integer() else None
         # Supplementary metadata failing must not discard a valid champion.
