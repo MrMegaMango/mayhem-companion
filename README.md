@@ -9,6 +9,7 @@ Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows t
 - Use **borderless or windowed** League. Exclusive fullscreen is not supported.
 - Keep **Auto scan** checked. **Auto** champion selection follows your live champion; manually choosing a champion also works with automatic augment scanning. The companion waits until you enter a match; the lobby alone does not expose a live champion.
 - Keep League focused with the three cards visible while scanning. Switching away pauses the reader and retains the last recognized choices with a paused label. Returning to League resumes scanning; choices clear after the selection disappears or the game ends.
+- Scanning reads the card-title band first at up to 4K resolution; the wider game area is a fallback for other layouts. An unreadable capture retains the last results with an explicit retry message.
 - Move the panel by dragging **MAYHEM**. Keep it away from the three augment cards.
 - **Ctrl+Alt+M** shows/hides the panel. **Ctrl+Alt+L** toggles click-through. **Ctrl+Alt+S** resumes/rescans.
 - If OCR misses a choice, type its name in a dropdown and press Enter. Choose a champion manually to browse outside a match. **Auto** returns to live detection.

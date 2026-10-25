@@ -59,6 +59,7 @@ class CaptureReader:
 
     # Includes the card headings and excludes most of the HUD and chat area.
     CROP = (0.04, 0.08, 0.96, 0.85)
+    TITLE_BAND = (0.15, 0.34, 0.85, 0.465)
 
     def __init__(self) -> None:
         self._engine = None
@@ -107,8 +108,8 @@ class CaptureReader:
             self._load_ocr()
             from PIL import Image
             SoftwareBitmap, PixelFormat, AlphaMode, DataWriter, OcrEngine = self._types
-            # Keeping a margin avoids driver/engine-specific maximum edges.
-            limit = min(int(OcrEngine.max_image_dimension), 2500)
+            # Preserve 4K title lettering; aggressive shrinking loses strokes.
+            limit = min(int(OcrEngine.max_image_dimension), 4096)
             output_size = _scaled_size(image.width, image.height, limit)
             prepared = image.convert("RGBA")
             if output_size != prepared.size:
@@ -233,15 +234,26 @@ class CaptureReader:
             # Discard the in-memory capture if the player switched apps mid-grab.
             if user32.GetForegroundWindow() != hwnd:
                 return _result("waiting", "Waiting for League to stay focused")
-            result = self.recognize_image(image)
+            # Whole-screen artwork can make Windows OCR drop every heading.
+            # Read the title band first, leaving the wider crop as a fallback.
+            band = tuple(round(size * fraction) for size, fraction in
+                         zip((width, height, width, height), self.TITLE_BAND))
+            title_image = image.crop((band[0] - crop[0], band[1] - crop[1],
+                                      band[2] - crop[0], band[3] - crop[1]))
+            result = self.recognize_image(title_image)
+            read_crop, read_image = band, title_image
+            if result["status"] == "ok" and not result["lines"]:
+                result = self.recognize_image(image)
+                read_crop, read_image = crop, image
             result["size"] = [width, height]
             for line in result["lines"]:
-                line["x"] = (crop[0] + line["x"] * image.width) / width
-                line["y"] = (crop[1] + line["y"] * image.height) / height
-                line["width"] *= image.width / width
-                line["height"] *= image.height / height
+                line["x"] = (read_crop[0] + line["x"] * read_image.width) / width
+                line["y"] = (read_crop[1] + line["y"] * read_image.height) / height
+                line["width"] *= read_image.width / width
+                line["height"] *= read_image.height / height
             if result["status"] == "ok" and not result["lines"]:
-                result["message"] = "No text visible; use borderless mode or manual lookup"
+                result["status"] = "unreadable"
+                result["message"] = "No readable game text. Retrying capture…"
             return result
         except Exception as exc:
             return _result("error", str(exc))

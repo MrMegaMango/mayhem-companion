@@ -96,10 +96,10 @@ class Worker(threading.Thread):
                             message += " Showing last recognized choices."
                         self.emit("scan_status", message)
                         continue
-                    self.emit("scan_status", "OCR unavailable: " + result.get("message", "Unknown error"))
-                    if self.last_offers and now - self.last_seen > 4:
-                        self.last_offers = ()
-                        self.emit("offers", [])
+                    message = result.get("message", "Game capture unavailable.")
+                    if self.last_offers:
+                        message += " Showing last recognized choices."
+                    self.emit("scan_status", message)
                     if result.get("status") == "error":
                         self.next_scan = now + 10
                     continue

@@ -1,6 +1,8 @@
 """Pure geometry tests; no game or desktop is captured by this test suite."""
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from PIL import Image
 
 from mayhem.capture import _line_bounds, _scaled_size, _word_groups, CaptureReader
 
@@ -33,6 +35,58 @@ class CaptureGeometryTests(unittest.TestCase):
         x0, y0, x1, y1 = CaptureReader.CROP
         self.assertTrue(0 < x0 < x1 < 1)
         self.assertTrue(0 < y0 < y1 < 1)
+
+
+class CaptureStateTests(unittest.TestCase):
+    def make_reader(self):
+        reader = CaptureReader()
+        user32 = Mock()
+        user32.GetForegroundWindow.return_value = 7
+        reader._load_windows = Mock(return_value=(user32, Mock()))
+        reader._game_rectangle = Mock(return_value=(7, (0, 0, 1920, 1080)))
+        patcher = patch("PIL.ImageGrab.grab", return_value=Image.new("RGB", (1766, 832)))
+        reader.grab = patcher.start()
+        self.addCleanup(patcher.stop)
+        reader.recognize_image = Mock(return_value={"status": "ok", "message": "", "lines": []})
+        return reader, user32
+
+    def test_empty_ocr_is_capture_failure_not_empty_offer_screen(self):
+        reader, _ = self.make_reader()
+        result = reader.scan()
+        self.assertEqual(result["status"], "unreadable")
+        self.assertIn("Retrying", result["message"])
+
+    def test_focus_switch_discards_captured_frame(self):
+        reader, user32 = self.make_reader()
+        user32.GetForegroundWindow.return_value = 8
+        self.assertEqual(reader.scan()["status"], "waiting")
+        reader.recognize_image.assert_not_called()
+
+    def test_capture_does_not_start_without_game_focus(self):
+        reader, _ = self.make_reader()
+        reader._game_rectangle.return_value = None
+        self.assertEqual(reader.scan()["status"], "waiting")
+        reader.grab.assert_not_called()
+
+    def test_title_band_is_read_before_complex_full_screen(self):
+        reader, _ = self.make_reader()
+        reader.recognize_image.return_value = {"status": "ok", "lines": [
+            {"text": "Pinball", "x": .5, "y": .5, "width": .1, "height": .1}]}
+        result = reader.scan()
+        image = reader.recognize_image.call_args.args[0]
+        self.assertEqual(image.size, (1344, 135))
+        reader.recognize_image.assert_called_once()
+        self.assertAlmostEqual(result["lines"][0]["x"], .5)
+        self.assertAlmostEqual(result["lines"][0]["y"], (367 + 67.5) / 1080)
+
+    def test_empty_title_band_tries_wider_layout(self):
+        reader, _ = self.make_reader()
+        reader.recognize_image.side_effect = [
+            {"status": "ok", "lines": []},
+            {"status": "ok", "lines": [{"text": "Pinball", "x": .5, "y": .5, "width": .1, "height": .1}]}]
+        result = reader.scan()
+        self.assertEqual(reader.recognize_image.call_count, 2)
+        self.assertEqual(result["status"], "ok")
 
 
 if __name__ == "__main__":

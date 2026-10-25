@@ -48,6 +48,25 @@ class SpellWorkerTests(unittest.TestCase):
         self.assertTrue(any(kind == "scan_status" and "Showing last recognized" in value
                             for kind, value in events.queue))
 
+    def test_failed_capture_keeps_last_choices_and_discloses_failure(self):
+        for status in ("unreadable", "error"):
+            with self.subTest(status=status):
+                events, requests, stop = queue.Queue(), queue.Queue(), Mock()
+                stop.wait.side_effect = [False, True]
+                provider = Mock()
+                provider.load_catalog.return_value = {"augments": {}}
+                with patch("mayhem.worker.StatsProvider", return_value=provider), \
+                        patch("mayhem.worker.poll_active_player", return_value={"status": "live"}), \
+                        patch("mayhem.worker.CaptureReader") as capture:
+                    capture.return_value.scan.return_value = {"status": status, "message": "Capture unavailable."}
+                    worker = Worker(events, requests, stop, ".")
+                    worker.last_offers = ("1", "2", "3")
+                    worker.last_seen = 0
+                    worker.run()
+                self.assertEqual(worker.last_offers, ("1", "2", "3"))
+                self.assertNotIn(("offers", []), list(events.queue))
+                self.assertIn(("scan_status", "Capture unavailable. Showing last recognized choices."), list(events.queue))
+
 
 if __name__ == "__main__":
     unittest.main()
