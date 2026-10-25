@@ -1,4 +1,5 @@
 """State regression tests use a fake view; no game interaction or desktop input."""
+import json
 import queue
 import unittest
 from unittest.mock import Mock, patch
@@ -33,6 +34,7 @@ class StateTests(unittest.TestCase):
         app.game_status = "live"
         app.champ_select = app.champion_preview = False
         app.switch_view = Mock()
+        app.fit_window = Mock()
         app.token = 5
         app.is_auto_offer = True
         app.offer_ids = ["1", "2", "3"]
@@ -57,6 +59,32 @@ class StateTests(unittest.TestCase):
         app.handle_game({"status": "live", "raw_champion": "game_character_displayname_Yasuo"})
         self.assertEqual(app.champion, "157")
         self.assertFalse(app.worker.provider.mock_calls)
+
+    def test_portrait_preference_moves_old_primary_position_to_selected_display(self):
+        app = self.make_view()
+        app.settings = {"display_device": "portrait", "display_preference": "portrait"}
+        displays = [
+            {"device": "main", "bounds": (0, 0, 3840, 2160), "work_area": (0, 0, 3840, 2100), "primary": True},
+            {"device": "portrait", "bounds": (-1080, -400, 0, 1520), "work_area": (-1080, -400, 0, 1480), "primary": False},
+        ]
+        with patch("mayhem.app.list_displays", return_value=displays):
+            x, y, height = app.panel_placement(800, [3370, 80])
+        self.assertGreaterEqual(x, -1080)
+        self.assertLessEqual(x + 440, 0)
+        self.assertGreaterEqual(y, -400)
+        self.assertLessEqual(y + height, 1480)
+
+    def test_close_preserves_display_preference_and_negative_position(self):
+        app = self.make_view()
+        app.settings = {"display_device": "portrait", "display_preference": "portrait"}
+        app.stop, app.settings_path = Mock(), Mock()
+        app.root.winfo_x.return_value = -1000
+        app.root.winfo_y.return_value = -320
+        app.close()
+        saved = json.loads(app.settings_path.write_text.call_args.args[0])
+        self.assertEqual(saved["position"], [-1000, -320])
+        self.assertEqual(saved["display_device"], "portrait")
+        self.assertEqual(saved["display_preference"], "portrait")
 
     def test_hidden_on_desktop_lobby_other_modes_and_unknown_mode(self):
         app = self.make_view()

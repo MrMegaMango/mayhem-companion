@@ -17,6 +17,7 @@ import webbrowser
 from .windows import Hotkeys, set_window_style
 from .worker import Worker
 from .data import resolve_champion_id
+from .displays import list_displays, select_display, place_panel
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -98,15 +99,8 @@ class Companion:
         root.overrideredirect(os.environ.get("MAYHEM_QA_CAPTURE") != "1")
         root.attributes("-topmost", True)
         root.attributes("-alpha", 1.0)
-        x, y = max(0, root.winfo_screenwidth() - 470), 80
-        saved = self.settings.get("position")
-        if isinstance(saved, list) and len(saved) == 2:
-            try:
-                x = max(0, min(int(saved[0]), root.winfo_screenwidth() - 440))
-                y = max(0, min(int(saved[1]), root.winfo_screenheight() - 200))
-            except (ValueError, TypeError):
-                pass
-        root.geometry(f"440x610+{x}+{y}")
+        x, y, height = self.panel_placement(610, self.settings.get("position"))
+        root.geometry(f"440x{height}+{x}+{y}")
         self.shell = tk.Frame(root, bg=BG, highlightbackground="#35465f", highlightthickness=1)
         self.shell.pack(fill="both", expand=True)
         header = tk.Frame(self.shell, bg=BG)
@@ -203,7 +197,8 @@ class Companion:
         self.button(buttons, "Retry data", lambda: self.requests.put(("retry", None))).pack(side="left", padx=6)
         self.label(buttons, "Ctrl+Alt+M  show / hide", 8, MUTED).pack(side="right")
         root.update_idletasks()
-        root.geometry(f"440x{self.shell.winfo_reqheight()}+{x}+{y}")
+        x, y, height = self.panel_placement(self.shell.winfo_reqheight(), (x, y))
+        root.geometry(f"440x{height}+{x}+{y}")
 
     def start_drag(self, event):
         self.drag_start = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
@@ -328,11 +323,24 @@ class Companion:
             self.lookup()
         self.root.after_idle(self.fit_window)
 
+    def panel_placement(self, height, position=None):
+        try:
+            displays = list_displays()
+        except OSError:
+            displays = []
+        if not displays:
+            bounds = (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+            displays = [{"device": "fallback", "bounds": bounds, "work_area": bounds, "primary": True}]
+        display = select_display(displays, preferred_device=self.settings.get("display_device"),
+                                 prefer_portrait=self.settings.get("display_preference") == "portrait",
+                                 position=position)
+        return place_panel(display, 440, height, position)
+
     def fit_window(self):
         self.root.update_idletasks()
-        height = min(self.shell.winfo_reqheight(), self.root.winfo_screenheight() - 60)
-        y = max(0, min(self.root.winfo_y(), self.root.winfo_screenheight() - height - 40))
-        self.root.geometry(f"440x{height}+{self.root.winfo_x()}+{y}")
+        x, y, height = self.panel_placement(self.shell.winfo_reqheight(),
+                                           (self.root.winfo_x(), self.root.winfo_y()))
+        self.root.geometry(f"440x{height}+{x}+{y}")
 
     def lookup_spells(self, force=False):
         if not force and self.spell_champion == self.champion:
@@ -436,6 +444,7 @@ class Companion:
         if not visible:
             self.root.withdraw()
         else:
+            self.fit_window()
             self.root.deiconify()
             self.root.attributes("-topmost", True)
             set_window_style(self.root, self.locked)
@@ -642,7 +651,8 @@ class Companion:
         if hasattr(self, "hotkeys"):
             self.hotkeys.close()
         try:
-            self.settings_path.write_text(json.dumps({"position": [self.root.winfo_x(), self.root.winfo_y()]}), encoding="utf-8")
+            self.settings["position"] = [self.root.winfo_x(), self.root.winfo_y()]
+            self.settings_path.write_text(json.dumps(self.settings), encoding="utf-8")
         except OSError:
             pass
         self.root.destroy()
