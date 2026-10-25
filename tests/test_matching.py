@@ -98,6 +98,66 @@ class OfferDetectorTests(unittest.TestCase):
         self.assertEqual(detect_offers([line("Stats!", 100), line("Back To Basics", 110)], CATALOG), [])
 
 
+
+class DuplicateTitleOfferTests(unittest.TestCase):
+    CATALOG = {"tank": "Tank Engine", "night": "Nightstalking", "shrink": "Shrink Engine"}
+
+    @staticmethod
+    def title(text, x, y=.404):
+        return {"text": text, "x": x, "y": y, "width": .12, "height": .018}
+
+    def actual_ocr_order(self, card_name="Nightstalking"):
+        # Captured order from the live game: the tooltip was returned before
+        # the middle card despite appearing much lower on the screen.
+        return [self.title("Tank Engine", .278),
+                self.title("Nightstalking", .361, .739),
+                self.title(card_name, .468),
+                self.title("Shrink Engine", .659)]
+
+    def test_earlier_tooltip_does_not_discard_middle_card(self):
+        results = detect_offers(self.actual_ocr_order(), self.CATALOG)
+        self.assertEqual([item["id"] for item in results], ["tank", "night", "shrink"])
+        self.assertEqual([item["x"] for item in results], [.278, .468, .659])
+        self.assertTrue(all(item["y"] == .404 for item in results))
+
+    def test_clearer_tooltip_does_not_replace_fuzzy_card_occurrence(self):
+        lines = self.actual_ocr_order("NightstaIking")
+        # Manual matching still chooses the strongest unique occurrence.
+        manual = next(item for item in match_augments(lines, self.CATALOG) if item["id"] == "night")
+        self.assertEqual(manual["similarity"], 1)
+        self.assertEqual(manual["y"], .739)
+        offers = detect_offers(lines, self.CATALOG)
+        self.assertEqual([item["id"] for item in offers], ["tank", "night", "shrink"])
+        self.assertLess(offers[1]["similarity"], 1)
+        self.assertEqual(offers[1]["y"], .404)
+
+    def test_tooltip_input_order_cannot_change_offer_row(self):
+        lines = self.actual_ocr_order()
+        for reordered in (list(reversed(lines)), lines[1:] + lines[:1]):
+            with self.subTest(lines=reordered):
+                self.assertEqual([item["id"] for item in detect_offers(reordered, self.CATALOG)],
+                                 ["tank", "night", "shrink"])
+
+    def test_same_augment_in_separate_card_positions_invalidates_row(self):
+        lines = [self.title("Tank Engine", .278), self.title("Nightstalking", .468),
+                 self.title("Nightstalking", .659)]
+        self.assertEqual(detect_offers(lines, self.CATALOG), [])
+
+    def test_two_copies_of_one_augment_are_not_two_choices(self):
+        self.assertEqual(detect_offers([self.title("Nightstalking", .278),
+                                       self.title("Nightstalking", .659)], self.CATALOG), [])
+
+    def test_duplicate_complete_rows_remain_ambiguous(self):
+        lines = [self.title("Tank Engine", .278), self.title("Nightstalking", .468),
+                 self.title("Shrink Engine", .659)]
+        lines += [{**item, "y": .739} for item in lines]
+        self.assertEqual(detect_offers(lines, self.CATALOG), [])
+
+    def test_three_card_and_two_card_rows_are_not_arbitrarily_ranked(self):
+        lines = [self.title("Tank Engine", .278), self.title("Nightstalking", .468),
+                 self.title("Shrink Engine", .659), self.title("Tank Engine", .278, .739),
+                 self.title("Nightstalking", .659, .739)]
+        self.assertEqual(detect_offers(lines, self.CATALOG), [])
 class WrappedTitleTests(unittest.TestCase):
     @staticmethod
     def fragment(text, x, y, width=160, height=24):

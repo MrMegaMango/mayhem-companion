@@ -7,7 +7,8 @@ A personal Windows prototype that reads your current League champion and the vis
 Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows treats a WSL/network path as an unsigned remote script, copy the project to a local Windows folder before running setup. Open **Mayhem Companion** from the desktop shortcut. Installed files live in `%USERPROFILE%\MayhemCompanion`; the development source can remain in WSL.
 
 - Use **borderless or windowed** League. Exclusive fullscreen is not supported.
-- Keep **Auto scan** checked and **Auto** champion selection active. The companion waits until you enter a match; the lobby alone does not expose a live champion.
+- Keep **Auto scan** checked. **Auto** champion selection follows your live champion; manually choosing a champion also works with automatic augment scanning. The companion waits until you enter a match; the lobby alone does not expose a live champion.
+- Keep League focused with the three cards visible while scanning. Switching away pauses the reader and retains the last recognized choices with a paused label. Returning to League resumes scanning; choices clear after the selection disappears or the game ends.
 - Move the panel by dragging **MAYHEM**. Keep it away from the three augment cards.
 - **Ctrl+Alt+M** shows/hides the panel. **Ctrl+Alt+L** toggles click-through. **Ctrl+Alt+S** resumes/rescans.
 - If OCR misses a choice, type its name in a dropdown and press Enter. Choose a champion manually to browse outside a match. **Auto** returns to live detection.
@@ -43,6 +44,6 @@ python -m mayhem --browse
 
 Python under WSL cannot use the Windows OCR API or reach League's Windows loopback API by default. Use Windows Python for the app; pure unit tests can run in either environment.
 
-Checks cover source validation/caching, champion matching, wrong-player rejection, spell-pair validation/current-pair matching, stale-response handling, OCR title ambiguity and layout, and failure states. Native English OCR was also tested using synthetic title images; spell detection was verified against a live game's local API. **A real Mayhem augment selection has not yet been tested on this installation.** OCR may miss stylized/wrapped titles or unusual display layouts; use the manual dropdown fallback.
+Checks cover source validation/caching, champion matching, wrong-player rejection, spell-pair validation/current-pair matching, stale-response handling, OCR title ambiguity and layout, focus-pause retention, and failure states. Native English OCR was tested using synthetic title images and a live custom Mayhem game at 3840×2160: all three choices populated their champion-specific rates, including a hovered tooltip repeating a card title. Keeping those results while switching focus was also verified. Spell detection was verified against a live game's local API. OCR may still miss stylized/wrapped titles or unusual display layouts; use the manual dropdown fallback.
 
 Mayhem Companion is not endorsed by Riot Games and does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.

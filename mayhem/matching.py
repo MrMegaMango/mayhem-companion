@@ -158,19 +158,17 @@ def _joined_title_lines(lines: list[dict[str, Any]], entries: list[tuple[Any, st
     return selected
 
 
-def match_augments(lines: Iterable[Any], catalog: Mapping[Any, Any], *, threshold: float = 0.87) -> list[dict[str, Any]]:
-    """Return confident, unique title candidates with optional OCR geometry.
+def _match_candidates(lines: Iterable[Any], catalog: Mapping[Any, Any], *, threshold: float = 0.87) -> list[dict[str, Any]]:
+    """Keep every confident spatial occurrence until its offer row is known.
 
-    Lines may be strings or dictionaries with text/x/y/width/height (or a
-    bounds dictionary). Catalog values may be names or records with name and
-    optional aliases. IDs retain their original type. Results are sorted by
-    y then x when geometry is present, otherwise by input order.
+    A tooltip may contain a clearer or earlier occurrence of the same name as
+    a card. Deduplicating by augment ID here would discard the card's geometry.
     """
     if not 0.5 <= threshold <= 1:
         raise ValueError("threshold must be between 0.5 and 1")
     entries = _catalog_entries(catalog)
     prepared = [parsed for raw_line in lines if (parsed := _line(raw_line)) is not None]
-    selected: dict[Any, dict[str, Any]] = {}
+    candidates = []
     for order, line in enumerate(_joined_title_lines(prepared, entries)):
         observed = normalize_title(line["text"])
         if not observed or len(observed) > 100:
@@ -186,19 +184,34 @@ def match_augments(lines: Iterable[Any], catalog: Mapping[Any, Any], *, threshol
         if len(scores) > 1 and (scores[1][0] == score or
                               (score < 1 and score - scores[1][0] < 0.055)):
             continue
-        candidate = {"id": identifier, "name": name, "similarity": round(score, 4),
-                     "x": line["x"], "y": line["y"], "width": line["width"],
-                     "height": line["height"], "_order": order}
-        existing = selected.get(identifier)
-        if existing is None or score > existing["similarity"]:
-            selected[identifier] = candidate
-    result = list(selected.values())
-    result.sort(key=lambda item: (item["y"] if item["y"] is not None else float("inf"),
-                                  item["x"] if item["x"] is not None else float("inf"), item["_order"]))
-    for item in result:
-        item.pop("_order")
-    return result
+        candidates.append({"id": identifier, "name": name, "similarity": round(score, 4),
+                           "x": line["x"], "y": line["y"], "width": line["width"],
+                           "height": line["height"], "_order": order})
+    return candidates
 
+
+def _sorted_matches(candidates: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = sorted(candidates, key=lambda item: (
+        item["y"] if item["y"] is not None else float("inf"),
+        item["x"] if item["x"] is not None else float("inf"), item["_order"]))
+    return [{key: value for key, value in item.items() if key != "_order"} for item in ordered]
+
+
+def match_augments(lines: Iterable[Any], catalog: Mapping[Any, Any], *, threshold: float = 0.87) -> list[dict[str, Any]]:
+    """Return confident, unique title candidates with optional OCR geometry.
+
+    Lines may be strings or dictionaries with text/x/y/width/height (or a
+    bounds dictionary). Catalog values may be names or records with name and
+    optional aliases. IDs retain their original type. Results are sorted by
+    y then x when geometry is present, otherwise by input order. Each augment
+    retains its highest-confidence occurrence; ties retain the input order.
+    """
+    selected: dict[Any, dict[str, Any]] = {}
+    for candidate in _match_candidates(lines, catalog, threshold=threshold):
+        existing = selected.get(candidate["id"])
+        if existing is None or candidate["similarity"] > existing["similarity"]:
+            selected[candidate["id"]] = candidate
+    return _sorted_matches(selected.values())
 
 def detect_offers(lines: Iterable[Any], catalog: Mapping[Any, Any], *, min_count: int = 2) -> list[dict[str, Any]]:
     """Return 2-3 confident distinct titles on one horizontal row, left to right.
@@ -210,7 +223,8 @@ def detect_offers(lines: Iterable[Any], catalog: Mapping[Any, Any], *, min_count
     """
     if min_count not in (2, 3):
         raise ValueError("min_count must be 2 or 3")
-    matches = [m for m in match_augments(lines, catalog) if m["x"] is not None and m["y"] is not None]
+    matches = _sorted_matches(m for m in _match_candidates(lines, catalog)
+                              if m["x"] is not None and m["y"] is not None)
     if len(matches) < min_count:
         return []
     normalized = all(0 <= m["x"] <= 1 and 0 <= m["y"] <= 1 for m in matches)
@@ -232,6 +246,10 @@ def detect_offers(lines: Iterable[Any], catalog: Mapping[Any, Any], *, min_count
     plausible = []
     for row in rows:
         if not min_count <= len(row) <= 3:
+            continue
+        # The same augment in two separated card positions is not a valid
+        # offer. Do not turn that impossible row into a plausible partial pair.
+        if len({item["id"] for item in row}) != len(row):
             continue
         row = sorted(row, key=lambda m: m["x"])
         min_gap = 0.05 if normalized else 30.0

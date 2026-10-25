@@ -35,6 +35,8 @@ class StateTests(unittest.TestCase):
         app.spell_sort.get.return_value = "Win rate"
         app.view = Mock()
         app.view.get.return_value = "augments"
+        app.auto = Mock()
+        app.auto.get.return_value = True
         return app
 
     def test_game_updates_resolve_locally_without_http(self):
@@ -137,6 +139,30 @@ class StateTests(unittest.TestCase):
         app.view.get.return_value = "spells"
         app.render_rates([{"win_rate": .5, "sample_count": 200, "version": "old"}])
         app.source.set.assert_not_called()
+
+    def test_auto_scan_still_populates_choices_for_manual_champion(self):
+        app = self.make_view()
+        app.follow = False
+        app.catalog["augments"] = {"1": {"name": "Goliath"}, "2": {"name": "Tank Engine"}}
+        app.lookup = Mock()
+        app.handle_event("offers", [{"id": "1"}, {"id": "2"}])
+        self.assertEqual(app.offer_ids, ["1", "2", None])
+        app.lookup.assert_called_once()
+
+    def test_scan_paused_message_is_visible_with_retained_choices(self):
+        app = self.make_view()
+        app.handle_event("scan_status", "Scan paused · Showing last recognized choices.")
+        app.status.set.assert_called_once()
+        self.assertEqual(app.offer_ids, ["1", "2", "3"])
+
+    def test_locked_panel_still_discloses_paused_scan(self):
+        app = self.make_view()
+        app.locked = True
+        app.handle_event("scan_status", "Scan paused · Showing last recognized choices.")
+        message = app.status.set.call_args.args[0]
+        self.assertIn("Scan paused", message)
+        self.assertIn("Ctrl+Alt+L to unlock", message)
+        self.assertEqual(app.offer_ids, ["1", "2", "3"])
 
 
 if __name__ == "__main__":

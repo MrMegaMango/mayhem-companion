@@ -463,7 +463,7 @@ class Companion:
                 if self.is_auto_offer:
                     self.clear_offers()
                     self.status.set("Waiting for augment choices…")
-            elif self.follow:
+            elif self.auto.get():
                 self.offer_ids = [str(x["id"]) for x in payload[:3]]
                 self.offer_ids += [None] * (3 - len(self.offer_ids))
                 for ident, card in zip(self.offer_ids, self.cards):
@@ -495,8 +495,11 @@ class Companion:
                     card["meta"].configure(text="Data unavailable", fg=AMBER)
                 self.status.set(error[:180])
         elif kind == "scan_status":
-            if self.view.get() == "augments" and self.auto.get() and not self.is_auto_offer and not self.locked:
-                self.status.set(payload or "Watching for augment choices…")
+            if self.view.get() == "augments" and self.auto.get():
+                message = payload or "Watching for augment choices…"
+                if self.locked:
+                    message += " · Ctrl+Alt+L to unlock"
+                self.status.set(message)
         elif kind == "error":
             self.status.set(str(payload)[:180])
 

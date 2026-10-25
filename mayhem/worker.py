@@ -88,9 +88,15 @@ class Worker(threading.Thread):
             self.next_scan = now + 1.3
             try:
                 result = self.capture.scan()
-                self.emit("scan_status", result.get("message", ""))
                 if result.get("status") != "ok":
                     self.pending_offers = ()
+                    if result.get("status") == "waiting":
+                        message = "Scan paused · focus League to resume."
+                        if self.last_offers:
+                            message += " Showing last recognized choices."
+                        self.emit("scan_status", message)
+                        continue
+                    self.emit("scan_status", "OCR unavailable: " + result.get("message", "Unknown error"))
                     if self.last_offers and now - self.last_seen > 4:
                         self.last_offers = ()
                         self.emit("offers", [])
@@ -98,6 +104,8 @@ class Worker(threading.Thread):
                         self.next_scan = now + 10
                     continue
                 offers = detect_offers(result["lines"], self.catalog["augments"])
+                self.emit("scan_status", f"{len(offers)} titles recognized · left to right" if offers
+                          else "No augment choices recognized. Keep the three cards visible.")
                 signature = tuple(str(x["id"]) for x in offers)
                 if signature:
                     self.last_seen = now
