@@ -55,7 +55,11 @@ class StateTests(unittest.TestCase):
         app.build_token = 9
         app.build_champion = "157"
         app.build_data = None
-        app.build_cards = [{"frame": Mock(), "names": Mock(), "value": Mock(), "meta": Mock()} for _ in range(5)]
+        app.build_cards = [{"frame": Mock(), "value": Mock(), "meta": Mock(),
+                            "items": [{"icon": Mock(), "name": Mock(), "icon_url": None} for _ in range(3)]}
+                           for _ in range(5)]
+        app.item_images = {}
+        app.icons = Mock()
         app.build_group, app.build_sort = Mock(), Mock()
         app.build_group.get.return_value = "AP"
         app.build_sort.get.return_value = "Games"
@@ -579,13 +583,51 @@ class StateTests(unittest.TestCase):
                  "win_rate": .52, "sample_count": 10000, "pick_rate": .6},
                 {"item_names": ["A", "B", "C"], "win_rate": None, "sample_count": 0, "pick_rate": None}]}]}
         app.render_builds()
-        self.assertIn("Liandry", app.build_cards[0]["names"].configure.call_args.kwargs["text"])
+        self.assertIn("Liandry", app.build_cards[0]["items"][0]["name"].configure.call_args.kwargs["text"])
         app.build_cards[0]["value"].configure.assert_called_with(text="52.0%")
         self.assertIn("60.0% of AP builds", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
         self.assertIn("LOW SAMPLE", app.build_cards[1]["meta"].configure.call_args.kwargs["text"])
         app.build_cards[2]["value"].configure.assert_called_with(text="—")
         app.build_cards[3]["frame"].pack.assert_not_called()
         self.assertIn("cached/offline", app.source.set.call_args.args[0])
+        app.icons.request.assert_not_called()
+
+    def test_build_icons_use_cached_images_and_request_missing_ones_without_hiding_names(self):
+        app = self.make_view()
+        cached = object()
+        urls = ["https://data.aramkit.com/assets/item/1-aaa.webp", None,
+                "https://data.aramkit.com/assets/item/3-bbb.webp"]
+        app.item_images[urls[0]] = cached
+        app.build_data = {"groups": [{"label": "AP", "rows": [
+            {"item_names": ["First", "Second", "Third"], "item_icon_urls": urls,
+             "win_rate": .52, "sample_count": 1000, "pick_rate": .6}]}]}
+        app.render_builds()
+        items = app.build_cards[0]["items"]
+        items[0]["icon"].configure.assert_called_with(image=cached)
+        items[1]["icon"].configure.assert_called_with(image="")
+        items[1]["name"].configure.assert_called_with(text="Second")
+        app.icons.request.assert_called_once_with(urls[2])
+
+    def test_delayed_icon_updates_only_slots_still_showing_that_item(self):
+        app = self.make_view()
+        app.build_cards[0]["items"][0]["icon_url"] = "new-url"
+        app.build_cards[1]["items"][2]["icon_url"] = "old-url"
+        source = Mock()
+        photo = object()
+        with patch("mayhem.app.ImageTk.PhotoImage", return_value=photo):
+            app.handle_event("item_icon", ("old-url", source))
+        self.assertIs(app.item_images["old-url"], photo)
+        app.build_cards[0]["items"][0]["icon"].configure.assert_not_called()
+        app.build_cards[1]["items"][2]["icon"].configure.assert_called_once_with(image=photo)
+        app.switch_view.assert_not_called()
+        app.source.set.assert_not_called()
+
+    def test_unrenderable_icon_does_not_clear_build_rates_or_break_event_loop(self):
+        app = self.make_view()
+        with patch("mayhem.app.ImageTk.PhotoImage", side_effect=RuntimeError("image unavailable")):
+            app.handle_event("item_icon", ("url", Mock()))
+        self.assertFalse(app.item_images)
+        app.build_cards[0]["value"].configure.assert_not_called()
 
     def test_build_error_cannot_clear_a_newer_champions_data(self):
         app = self.make_view()

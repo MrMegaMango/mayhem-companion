@@ -27,7 +27,9 @@ Turn on **Start with League** in the tray menu to launch automatically when the 
 
 ## Data
 
-Data source: [ARAMKit](https://aramkit.com/en-US), using its public version manifest, champion/augment catalogs and the currently selected champion's stats. The app downloads only catalog data and requested champions, caches immutable snapshots, and checks the manifest at most daily. No key or account is needed.
+Data source: [ARAMKit](https://aramkit.com/en-US), using its public version manifest, champion/augment catalogs and the currently selected champion's stats. The app downloads catalog data, requested champions and icons for displayed items, caches immutable snapshots, and checks the manifest at most daily. No key or account is needed.
+
+Build cards show each item's icon beside its name. Icons come from the matching ARAMKit item catalog, download on a separate background thread, and are cached locally. Missing or unavailable icons leave the item names and statistics usable and do not delay augment scanning.
 
 Rates are **champion + augment**, **champion + core item set**, or **champion + spell pair**, never global rates substituted for missing champion data. Missing data is blank; unavailable builds and pairs are not invented. Samples below 200 games are marked (an asterisk in the Spells table). Cached fallback data retains its original patch/date and is labeled. The rates reflect ARAMKit's sample, not all regions; collection/provenance claims belong to that provider. Source attribution is clickable in the panel. Respect [ARAMKit's terms](https://aramkit.com/en-US/terms); this is for personal, noncommercial use, not bulk redistribution of its data.
 

@@ -27,8 +27,8 @@ SUMMONER_SPELLS = {
     "4": {"name": "Flash"}, "32": {"name": "Mark"}, "6": {"name": "Ghost"},
 }
 ITEMS = {
-    "0": {"name": "No Boots"}, "3031": {"name": "Infinity Edge"},
-    "3087": {"name": "Statikk Shiv"}, "6673": {"name": "Immortal Shieldbow"},
+    "0": {"name": "No Boots"}, "3031": {"name": "Infinity Edge", "icon": f"{DATA_BASE}/assets/item/3031-1dd45a28b705.webp"},
+    "3087": {"name": "Statikk Shiv", "icon": "assets/item/3087-15854b8b753d.webp"}, "6673": {"name": "Immortal Shieldbow"},
     "3153": {"name": "Blade of the Ruined King"},
 }
 DETAIL = {
@@ -699,13 +699,14 @@ class StatsProviderTests(unittest.TestCase):
         self.assertEqual(self.provider.item_builds_for(157)["groups"], first["groups"])
         self.assertEqual(len(self.requests), attempts)
         self.clock.return_value += RETRY_DELAY + 1
-        self.responses[item_url] = {**ITEMS, "3087": {"name": "New item name"}}
+        self.responses[item_url] = {**ITEMS, "3087": {"name": "New item name", "icon": "assets/item/3087-0123456789ab.webp"}}
         recovered = self.provider.item_builds_for(157)
         self.assertFalse(recovered["stale"])
         self.assertEqual(recovered["version"], "16.22")
         self.assertEqual(recovered["data_date"], "2026-11-01")
         self.assertEqual(recovered["groups"][0]["rows"][0]["win_rate"], 0.75)
         self.assertEqual(recovered["groups"][0]["rows"][0]["item_names"][0], "New item name")
+        self.assertEqual(recovered["groups"][0]["rows"][0]["item_icon_urls"][0], f"{DATA_BASE}/assets/item/3087-0123456789ab.webp")
 
     def test_invalid_new_item_resources_never_silently_use_old_builds(self):
         for mode in ("malformed", "not_found"):
@@ -735,6 +736,46 @@ class StatsProviderTests(unittest.TestCase):
         self.assertEqual(result["version"], "16.22")
         self.assertFalse(result["stale"])
         self.assertNotIn(resource_url("items", NEXT_VERSION), self.requests)
+
+
+
+    def test_item_icon_urls_align_with_core_and_purchase_order_names(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        result = self.provider.item_builds_for(157)
+        core = result["groups"][0]["rows"][0]
+        shiv = f"{DATA_BASE}/assets/item/3087-15854b8b753d.webp"
+        edge = f"{DATA_BASE}/assets/item/3031-1dd45a28b705.webp"
+        self.assertEqual(core["item_icon_urls"], [shiv, edge, None])
+        self.assertEqual(core["routes"][0]["item_icon_urls"], [edge, shiv, None])
+        self.assertEqual(len(core["item_icon_urls"]), len(core["item_names"]))
+        self.assertEqual(len(core["item_icon_urls"]), len(core["item_ids"]))
+        self.assertFalse(any("/assets/" in url for url in self.requests))
+
+    def test_invalid_optional_item_icons_do_not_invalidate_statistics(self):
+        for invalid in (
+            None, "", True, 123, [], {},
+            "http://data.aramkit.com/assets/item/3087-15854b8b753d.webp",
+            "https://other.example/assets/item/3087-15854b8b753d.webp",
+            "https://data.aramkit.com.evil.example/assets/item/3087-15854b8b753d.webp",
+            "https://data.aramkit.com:443/assets/item/3087-15854b8b753d.webp",
+            "https://user@data.aramkit.com/assets/item/3087-15854b8b753d.webp",
+            "//data.aramkit.com/assets/item/3087-15854b8b753d.webp",
+            "assets/item/../3087-15854b8b753d.webp",
+            "assets/item/%2e%2e/3087-15854b8b753d.webp",
+            "assets/item/3087-15854b8b753d.webp?tracking=1",
+            "assets/item/3087-15854b8b753d.webp#part",
+            "assets/item/3087-15854b8b753d.webp ",
+            "assets/item/3087.webp",
+            "assets/item/3087-15854b8b753d.png",
+            "assets/champion/3087-15854b8b753d.webp",
+        ):
+            with self.subTest(icon=invalid), tempfile.TemporaryDirectory() as directory:
+                self.responses[detail_url()] = ITEM_DETAIL
+                self.responses[resource_url("items")] = {**ITEMS, "3087": {**ITEMS["3087"], "icon": invalid}}
+                core = StatsProvider(Path(directory)).item_builds_for(157)["groups"][0]["rows"][0]
+                self.assertIsNone(core["item_icon_urls"][0])
+                self.assertEqual((core["win_rate"], core["sample_count"]), (0.62, 600))
+                self.assertEqual(core["item_names"][0], "Statikk Shiv")
 
 
 if __name__ == "__main__":

@@ -321,6 +321,17 @@ def _item_resource(data: object) -> dict:
     return data
 
 
+def _item_icon_url(value: object) -> str | None:
+    """Resolve optional content-addressed icons; reject every other URL/path."""
+    if not isinstance(value, str):
+        return None
+    prefix = f"{DATA_BASE}/"
+    path = value[len(prefix):] if value.startswith(prefix) else value
+    if not re.fullmatch(r"assets/item/[A-Za-z0-9][A-Za-z0-9_-]*-[0-9a-f]{12}\.webp", path):
+        return None
+    return prefix + path
+
+
 def _named_item_builds(groups: list[dict], resources: dict) -> list[dict]:
     groups = copy.deepcopy(groups)
     for group in groups:
@@ -329,6 +340,9 @@ def _named_item_builds(groups: list[dict], resources: dict) -> list[dict]:
                 if any(item_id not in resources for item_id in row["item_ids"]):
                     raise DataUnavailableError("ARAMKit item names do not match the statistics")
                 row["item_names"] = [resources[item_id]["name"] for item_id in row["item_ids"]]
+                row["item_icon_urls"] = [
+                    _item_icon_url(resources[item_id].get("icon")) for item_id in row["item_ids"]
+                ]
     return groups
 
 

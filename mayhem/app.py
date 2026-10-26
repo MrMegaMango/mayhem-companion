@@ -15,11 +15,14 @@ import tkinter as tk
 from tkinter import ttk
 import webbrowser
 
+from PIL import Image, ImageTk
+
 from .windows import Hotkeys, set_window_style
 from .worker import Worker
 from .data import resolve_champion_id
 from .displays import list_displays, select_display, place_panel
 from .tray import TrayIcon
+from .icons import IconLoader
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -81,8 +84,11 @@ class Companion:
         self.build_champion = None
         self.build_data = None
         self.build_cards = []
+        self.item_images = {}
         self.live_spells = []
         self.build()
+        self.icons = IconLoader(self.events, self.stop, self.storage / "cache" / "icons")
+        self.icons.start()
         self.hotkeys = Hotkeys(root, {101: (ord("M"), self.toggle_visible),
                                      102: (ord("S"), self.rescan),
                                      103: (ord("L"), self.toggle_lock)},
@@ -358,11 +364,23 @@ class Companion:
             value = self.label(rate, "—", 21, TEXT, True)
             value.pack(anchor="e")
             self.label(rate, "WIN RATE", 7, MUTED).pack(anchor="e")
-            names = self.label(top, size=10, color=TEXT, wraplength=270, anchor="w", justify="left")
-            names.pack(side="left", fill="x", expand=True)
+            items_panel = tk.Frame(top, bg=PANEL)
+            items_panel.pack(side="left", fill="x", expand=True)
+            items = []
+            for _ in range(3):
+                item_row = tk.Frame(items_panel, bg=PANEL)
+                item_row.pack(fill="x", pady=2)
+                icon_frame = tk.Frame(item_row, bg=FIELD, width=36, height=36)
+                icon_frame.pack(side="left", padx=(0, 7))
+                icon_frame.pack_propagate(False)
+                icon = tk.Label(icon_frame, bg=FIELD, bd=0)
+                icon.pack(fill="both", expand=True)
+                name = self.label(item_row, size=9, color=TEXT, wraplength=190, anchor="w", justify="left")
+                name.pack(side="left", fill="x", expand=True)
+                items.append({"icon": icon, "name": name, "icon_url": None})
             meta = self.label(frame, size=8, color=MUTED, wraplength=374, anchor="w", justify="left")
             meta.pack(fill="x", pady=(5, 0))
-            self.build_cards.append({"frame": frame, "names": names, "value": value, "meta": meta})
+            self.build_cards.append({"frame": frame, "items": items, "value": value, "meta": meta})
         self.build_note = tk.StringVar(value="")
         self.build_note_label = self.label(self.build_panel, size=8, color=MUTED,
                                           textvariable=self.build_note, wraplength=398, anchor="w", justify="left")
@@ -432,7 +450,15 @@ class Companion:
             for card, row in zip(self.build_cards, rows):
                 count, rate, pick = row["sample_count"], row["win_rate"], row.get("pick_rate")
                 low = count < 200
-                card["names"].configure(text="\n+ ".join(row["item_names"]))
+                urls = row.get("item_icon_urls", [])
+                for index, item in enumerate(card["items"]):
+                    item["name"].configure(text=row["item_names"][index])
+                    url = urls[index] if index < len(urls) else None
+                    item["icon_url"] = url
+                    photo = self.item_images.get(url)
+                    item["icon"].configure(image=photo if photo is not None else "")
+                    if url and photo is None:
+                        self.icons.request(url)
                 card["value"].configure(text=f"{rate * 100:.1f}%" if rate is not None and count else "—")
                 parts = [f"{compact_count(count)} games"]
                 if pick is not None:
@@ -667,7 +693,21 @@ class Companion:
                 self.root.after(100, self.drain)
 
     def handle_event(self, kind, payload):
-        if kind == "tray_action":
+        if kind == "item_icon":
+            url, image = payload
+            # Tk objects are created only on this UI thread. The image loader
+            # is independent of OCR and cannot delay augment recognition.
+            try:
+                photo = ImageTk.PhotoImage(image.resize((36, 36), Image.Resampling.LANCZOS), master=self.root)
+            except Exception:
+                logging.debug("Item icon could not be displayed", exc_info=True)
+                return
+            self.item_images[url] = photo
+            for card in self.build_cards:
+                for item in card["items"]:
+                    if item["icon_url"] == url:
+                        item["icon"].configure(image=photo)
+        elif kind == "tray_action":
             if payload == "show":
                 self.show_from_tray()
             elif payload == "hide":
