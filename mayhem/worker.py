@@ -184,13 +184,13 @@ class Worker(threading.Thread):
                 continue
             if now < self.next_scan:
                 continue
-            self.next_scan = now + self.ACTIVE_SCAN_SECONDS
+            scan_delay = self.ACTIVE_SCAN_SECONDS
             try:
                 result = self.capture.scan()
                 if result.get("status") != "ok":
                     self.pending_offers = ()
                     self.empty_since, self.empty_frames = None, 0
-                    self.next_scan = now + self.IDLE_SCAN_SECONDS
+                    scan_delay = self.IDLE_SCAN_SECONDS
                     if result.get("status") == "waiting":
                         message = "Scan paused · focus League to resume."
                         if self.last_offers:
@@ -202,7 +202,7 @@ class Worker(threading.Thread):
                         message += " Showing last recognized choices."
                     self.emit("scan_status", message)
                     if result.get("status") == "error":
-                        self.next_scan = now + 10
+                        scan_delay = 10
                     continue
                 offers = detect_offers(result["lines"], self.catalog["augments"])
                 self.emit("scan_status", f"{len(offers)} titles recognized · left to right" if offers
@@ -232,11 +232,16 @@ class Worker(threading.Thread):
                         self.last_offers = ()
                         self.force_offer_emit = False
                         self.emit("offers", [])
-                    self.next_scan = now + (self.ACTIVE_SCAN_SECONDS if self.last_offers or self.force_offer_emit
-                                            else self.IDLE_SCAN_SECONDS)
+                    scan_delay = (self.ACTIVE_SCAN_SECONDS if self.last_offers or self.force_offer_emit
+                                  else self.IDLE_SCAN_SECONDS)
             except Exception as exc:
                 self.pending_offers = ()
                 self.empty_since, self.empty_frames = None, 0
                 logging.exception("OCR failed")
                 self.emit("scan_status", f"OCR unavailable: {exc}. Manual search still works.")
-                self.next_scan = now + 10
+                scan_delay = 10
+            finally:
+                # Capture/OCR can take longer than the interval. Always leave
+                # a full cooldown after it finishes instead of immediately
+                # starting another expensive pass with an overdue deadline.
+                self.next_scan = time.monotonic() + scan_delay

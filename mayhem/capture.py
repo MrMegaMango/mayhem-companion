@@ -16,6 +16,22 @@ from statistics import median
 from typing import Any
 
 
+class _BitmapInfoHeader(ctypes.Structure):
+    # Fixed-width Win32 fields also let the native boundary be tested off Windows.
+    _fields_ = [
+        ("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
+        ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
+        ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+        ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
+        ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
+        ("biClrImportant", ctypes.c_uint32),
+    ]
+
+
+class _BitmapInfo(ctypes.Structure):
+    _fields_ = [("bmiHeader", _BitmapInfoHeader), ("bmiColors", ctypes.c_uint32 * 1)]
+
+
 def _result(status: str, message: str, lines: list | None = None,
             size: tuple[int, int] | list[int] = (0, 0)) -> dict[str, Any]:
     return {"status": status, "message": message, "lines": lines or [],
@@ -65,6 +81,7 @@ class CaptureReader:
         self._engine = None
         self._types = None
         self._windows = None
+        self._gdi = None
 
     def _load_ocr(self) -> None:
         if self._engine is not None:
@@ -178,6 +195,100 @@ class CaptureReader:
         self._windows = user32, kernel32
         return self._windows
 
+    def _load_gdi(self) -> tuple[Any, Any]:
+        if self._gdi is not None:
+            return self._gdi
+        user32, _ = self._load_windows()
+        gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+        user32.GetDC.argtypes = [wintypes.HWND]
+        user32.GetDC.restype = wintypes.HDC
+        user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+        user32.ReleaseDC.restype = ctypes.c_int
+        gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi32.CreateCompatibleDC.restype = wintypes.HDC
+        gdi32.CreateDIBSection.argtypes = [
+            wintypes.HDC, ctypes.POINTER(_BitmapInfo), wintypes.UINT,
+            ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD,
+        ]
+        gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HANDLE]
+        gdi32.SelectObject.restype = wintypes.HANDLE
+        gdi32.BitBlt.argtypes = [
+            wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD,
+        ]
+        gdi32.BitBlt.restype = wintypes.BOOL
+        gdi32.GdiFlush.argtypes = []
+        gdi32.GdiFlush.restype = wintypes.BOOL
+        gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+        gdi32.DeleteObject.restype = wintypes.BOOL
+        gdi32.DeleteDC.argtypes = [wintypes.HDC]
+        gdi32.DeleteDC.restype = wintypes.BOOL
+        self._gdi = user32, gdi32
+        return self._gdi
+
+    def _grab_region(self, bbox: tuple[int, int, int, int]) -> Any:
+        """Copy only this physical desktop rectangle into a detached RGB image."""
+        if (not isinstance(bbox, (tuple, list)) or len(bbox) != 4
+                or any(type(value) is not int or not -(2**31) <= value < 2**31
+                       for value in bbox)):
+            raise ValueError("Invalid capture region.")
+        left, top, right, bottom = bbox
+        width, height = right - left, bottom - top
+        if not (0 < width <= 16384 and 0 < height <= 16384
+                and width * height <= 64_000_000):
+            raise ValueError("Invalid capture region dimensions.")
+        screen_dc = memory_dc = bitmap = previous_bitmap = None
+        user32 = gdi32 = None
+        try:
+            from PIL import Image
+            user32, gdi32 = self._load_gdi()
+            screen_dc = user32.GetDC(None)
+            if not screen_dc:
+                raise OSError
+            memory_dc = gdi32.CreateCompatibleDC(screen_dc)
+            if not memory_dc:
+                raise OSError
+            info = _BitmapInfo()
+            info.bmiHeader.biSize = ctypes.sizeof(_BitmapInfoHeader)
+            info.bmiHeader.biWidth = width
+            info.bmiHeader.biHeight = -height  # Top-down, uncompressed 32-bit BGRX.
+            info.bmiHeader.biPlanes = 1
+            info.bmiHeader.biBitCount = 32
+            bits = ctypes.c_void_p()
+            bitmap = gdi32.CreateDIBSection(screen_dc, ctypes.byref(info), 0,
+                                            ctypes.byref(bits), None, 0)
+            if not bitmap or not bits.value:
+                raise OSError
+            selected = gdi32.SelectObject(memory_dc, bitmap)
+            if not selected or selected == ctypes.c_void_p(-1).value:
+                raise OSError
+            previous_bitmap = selected
+            # Unlike Pillow's Windows bbox path, BitBlt copies the requested
+            # rectangle directly; it never first reads the whole virtual desktop.
+            if not gdi32.BitBlt(memory_dc, 0, 0, width, height,
+                               screen_dc, left, top, 0x00CC0020):  # SRCCOPY
+                raise OSError
+            # CreateDIBSection requires synchronization before accessing bits.
+            if not gdi32.GdiFlush():
+                raise OSError
+            data = ctypes.string_at(bits, width * height * 4)
+            return Image.frombytes("RGB", (width, height), data, "raw", "BGRX", 0, 1)
+        except Exception:
+            raise RuntimeError("Windows could not capture the game region. "
+                               "Try borderless or windowed mode.") from None
+        finally:
+            if previous_bitmap:
+                gdi32.SelectObject(memory_dc, previous_bitmap)
+            # Destroy the memory DC before its bitmap so even a failed restore
+            # cannot leave the bitmap selected when DeleteObject is called.
+            if memory_dc:
+                gdi32.DeleteDC(memory_dc)
+            if bitmap:
+                gdi32.DeleteObject(bitmap)
+            if screen_dc:
+                user32.ReleaseDC(None, screen_dc)
+
     def _game_rectangle(self) -> tuple[int, tuple[int, int, int, int]] | None:
         user32, kernel32 = self._load_windows()
         hwnd = user32.GetForegroundWindow()
@@ -222,35 +333,33 @@ class CaptureReader:
                 return _result("waiting", "Focus League in borderless or windowed mode to scan")
             hwnd, (left, top, right, bottom) = game
             width, height = right - left, bottom - top
-            x0, y0, x1, y1 = self.CROP
-            # Integer crop coordinates are also used to remap OCR boxes exactly.
-            crop = (round(width * x0), round(height * y0),
-                    round(width * x1), round(height * y1))
-            from PIL import ImageGrab
-            image = ImageGrab.grab(
-                bbox=(left + crop[0], top + crop[1], left + crop[2], top + crop[3]),
-                all_screens=True,
-            )
-            # Discard the in-memory capture if the player switched apps mid-grab.
-            if user32.GetForegroundWindow() != hwnd:
-                return _result("waiting", "Waiting for League to stay focused")
-            # Whole-screen artwork can make Windows OCR drop every heading.
-            # Read the title band first, leaving the wider crop as a fallback.
-            band = tuple(round(size * fraction) for size, fraction in
-                         zip((width, height, width, height), self.TITLE_BAND))
-            title_image = image.crop((band[0] - crop[0], band[1] - crop[1],
-                                      band[2] - crop[0], band[3] - crop[1]))
-            result = self.recognize_image(title_image)
-            read_crop, read_image = band, title_image
-            if result["status"] == "ok" and not result["lines"]:
-                result = self.recognize_image(image)
-                read_crop, read_image = crop, image
+            # Capture the title band itself, not a desktop-sized image cropped
+            # afterwards. Only a successful empty read needs the wider layout.
+            for fractions in (self.TITLE_BAND, self.CROP):
+                read_crop = tuple(round(size * fraction) for size, fraction in
+                                  zip((width, height, width, height), fractions))
+                if user32.GetForegroundWindow() != hwnd:
+                    return _result("waiting", "Waiting for League to stay focused")
+                read_image = self._grab_region((
+                    left + read_crop[0], top + read_crop[1],
+                    left + read_crop[2], top + read_crop[3],
+                ))
+                try:
+                    # Discard a frame if the player switched apps mid-grab.
+                    if user32.GetForegroundWindow() != hwnd:
+                        return _result("waiting", "Waiting for League to stay focused")
+                    result = self.recognize_image(read_image)
+                    read_width, read_height = read_image.size
+                finally:
+                    read_image.close()
+                if result["status"] != "ok" or result["lines"]:
+                    break
             result["size"] = [width, height]
             for line in result["lines"]:
-                line["x"] = (read_crop[0] + line["x"] * read_image.width) / width
-                line["y"] = (read_crop[1] + line["y"] * read_image.height) / height
-                line["width"] *= read_image.width / width
-                line["height"] *= read_image.height / height
+                line["x"] = (read_crop[0] + line["x"] * read_width) / width
+                line["y"] = (read_crop[1] + line["y"] * read_height) / height
+                line["width"] *= read_width / width
+                line["height"] *= read_height / height
             if result["status"] == "ok" and not result["lines"]:
                 result["status"] = "unreadable"
                 result["message"] = "No readable game text. Retrying capture…"

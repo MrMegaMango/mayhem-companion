@@ -251,7 +251,7 @@ class OfferExpiryTests(unittest.TestCase):
                 patch("mayhem.worker.ClientReader"), \
                 patch("mayhem.worker.CaptureReader") as capture, \
                 patch("mayhem.worker.detect_offers", side_effect=lambda lines, catalog: lines), \
-                patch("mayhem.worker.time.monotonic", side_effect=times), \
+                patch("mayhem.worker.time.monotonic", side_effect=[t for t in times for _ in range(2)]), \
                 patch("mayhem.worker.logging.exception"):
             capture.return_value.scan.side_effect = captures
             worker = Worker(events, requests, stop, ".")
@@ -262,6 +262,49 @@ class OfferExpiryTests(unittest.TestCase):
             worker.run()
             self.assertEqual(capture.return_value.scan.call_count, len(captures))
         return worker, list(events.queue)
+
+    def test_slow_capture_leaves_full_cooldown_before_next_scan(self):
+        cases = (
+            (self.ok(("1", "2", "3")), Worker.ACTIVE_SCAN_SECONDS),
+            (self.ok(), Worker.IDLE_SCAN_SECONDS),
+            ({"status": "waiting"}, Worker.IDLE_SCAN_SECONDS),
+            ({"status": "unreadable"}, Worker.IDLE_SCAN_SECONDS),
+            ({"status": "error"}, 10),
+            (OSError("Capture unavailable"), 10),
+        )
+        for result, cooldown in cases:
+            with self.subTest(result=result):
+                clock, starts = [10.0], []
+                duration = 1.4
+
+                def wait(seconds):
+                    clock[0] += seconds
+                    return len(starts) >= 2
+
+                def scan():
+                    starts.append(clock[0])
+                    clock[0] += duration
+                    if isinstance(result, Exception):
+                        raise result
+                    return result
+
+                provider, stop = Mock(), Mock()
+                provider.load_catalog.return_value = {"augments": {}}
+                stop.wait.side_effect = wait
+                with patch("mayhem.worker.StatsProvider", return_value=provider), \
+                        patch("mayhem.worker.ClientReader"), \
+                        patch("mayhem.worker.CaptureReader") as capture, \
+                        patch("mayhem.worker.detect_offers", side_effect=lambda lines, catalog: lines), \
+                        patch("mayhem.worker.time.monotonic", side_effect=lambda: clock[0]), \
+                        patch("mayhem.worker.logging.exception"):
+                    capture.return_value.scan.side_effect = scan
+                    worker = Worker(queue.Queue(), queue.Queue(), stop, ".")
+                    worker.next_poll = float("inf")
+                    worker.last_game = {"status": "live", "is_aram": True}
+                    worker.run()
+                gap = starts[1] - (starts[0] + duration)
+                self.assertGreaterEqual(gap + 1e-9, cooldown)
+                self.assertLess(gap, cooldown + 0.051)
 
     def test_empty_scans_clear_once_after_debounce_and_return_to_idle_cadence(self):
         worker, events = self.run_scans([self.ok()] * 5, [10, 10.4, 10.8, 11.21, 12.1])

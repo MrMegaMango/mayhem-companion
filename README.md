@@ -17,7 +17,8 @@ Turn on **Start with League** in the tray menu to launch automatically when the 
 - Use **borderless or windowed** League. Exclusive fullscreen is not supported.
 - Keep **Auto scan** checked. **Auto** champion selection follows your champion during champion select and in game, including champion swaps. Manually choosing a champion also works with automatic augment scanning.
 - Keep League focused with the three cards visible while scanning. Switching away pauses the reader and retains the last recognized choices with a paused label. Returning to League resumes scanning; choices clear after the selection disappears or the game ends.
-- Scanning reads the card-title band first at up to 4K resolution; the wider game area is a fallback for other layouts. An unreadable capture retains the last results with an explicit retry message.
+- Scanning captures and reads only the card-title band first at up to 4K resolution; the wider game area is captured only when that band contains no readable text. An unreadable capture retains the last results with an explicit retry message. Each scan leaves a pause after OCR finishes, including when recognition is slow.
+- To check whether scanning affects game FPS, uncheck **Auto scan** while keeping the companion open. Manual data lookup remains available. Hiding the panel alone does not stop scanning; **Exit** stops the companion completely.
 - Move the panel by dragging **MAYHEM**. Keep it away from the three augment cards.
 - Placement uses the chosen monitor's work area, including displays left of or above the main screen. The saved display preference is preserved across resizing and restarts, with a visible fallback if that monitor is disconnected. The visible panel checks its actual position after opening and periodically afterward, returning to the preferred monitor if Windows relocates it or the monitor reconnects. Temporary monitor-query failures retain the last known display; dragging within the preferred screen remains available.
 - **Ctrl+Alt+M** shows/hides the panel. **Ctrl+Alt+L** toggles click-through. **Ctrl+Alt+S** resumes/rescans.
@@ -50,6 +51,8 @@ In-game champion and inventory detection use Riot's documented read-only Live Cl
 
 Screen capture runs only when the League game executable is the visible foreground window. Screenshots remain in memory and OCR runs locally. No screenshots, player names, Riot IDs or game histories are uploaded. HTTP requests to ARAMKit identify the public champion ID being looked up, as a normal page lookup would. Cache, window position and error logs are under `%USERPROFILE%\MayhemCompanion`.
 
+Capture copies the requested rectangle directly through Windows GDI instead of reading both monitors and cropping afterward. The usual title band is 8.75% of the game frame; the broader layout fallback is captured only if needed. OCR leaves a 0.35-second pause after an active scan completes, 0.8 seconds between idle/paused scans, and 10 seconds after an OCR error. Disabling Auto scan stops capture/OCR while retaining manual lookups and local game polling.
+
 The app registers modified hotkeys without keyboard hooks. Automatic launch is a per-user Startup shortcut and needs no administrator access. Close with ×. To uninstall, disable **Start with League**, close the companion, and delete its installed folder and desktop shortcut.
 
 ## Development and verification
@@ -65,6 +68,8 @@ python -m mayhem --browse
 Python under WSL cannot use the Windows OCR API or reach League's Windows loopback API by default. Use Windows Python for the app; pure unit tests can run in either environment.
 
 Checks cover source validation/caching, champion matching, wrong-player rejection, spell-pair validation/current-pair matching, stale-response handling, OCR title ambiguity and layout, focus-pause retention, and failure states. Native English OCR was tested using synthetic title images and a live custom Mayhem game at 3840×2160: all three choices populated their champion-specific rates, including a hovered tooltip repeating a card title. Keeping those results while switching focus was also verified. Spell detection was verified against a live game's local API. OCR may still miss stylized/wrapped titles or unusual display layouts; use the manual dropdown fallback.
+
+The direct-region capture update was checked with a temporary native title fixture on the portrait monitor: pixel colors/orientation, all three recognized titles, and stable GDI handle counts after repeated captures. A 2688×270 synthetic title band also retained all three titles. In a 20-sample desktop fixture comparison, median capture time fell from 115.5 ms for Pillow's full-desktop bbox path to 10.0 ms for direct-region capture. This measures capture cost, not game FPS; the update has not yet been measured during a match. Regression tests also simulate slow recognition and verify the full cooldown on success, pause and error paths.
 
 Champion-select fields were checked against the running client's own API schema. Automated checks cover local-player matching, champion previews/swaps, spell changes, stale result rejection, and phase transitions. A real Tk panel was exercised with simulated champion-select states and real cached spell statistics; the local client connection was also verified. A live champion-select screen has not yet been used to verify this version end to end.
 
