@@ -467,9 +467,9 @@ class Companion:
                                             state="readonly", width=17)
         self.build_group_box.pack(side="left")
         self.build_group_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
-        self.build_sort = tk.StringVar(value="Games")
+        self.build_sort = tk.StringVar(value="Win rate")
         sort_box = ttk.Combobox(toolbar, textvariable=self.build_sort, state="readonly", width=10,
-                               values=["Games", "Win rate", "Pick rate"])
+                               values=["Win rate", "Games", "Pick rate"])
         sort_box.pack(side="right")
         sort_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
         self.build_summary = tk.StringVar(value="Choose a champion to see core builds.")

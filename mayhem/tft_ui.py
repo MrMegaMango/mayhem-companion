@@ -346,7 +346,7 @@ class TftPanel(tk.Frame):
             return
         self.view.set(view)
         self.query.set("")
-        self.sort.set("Games" if view in ("comps", "items") else "Source order")
+        self.sort.set("1st place" if view == "items" else "Games" if view == "comps" else "Source order")
         self.selected_id = None
         self._compare = False
         self._configure_view()
@@ -385,6 +385,9 @@ class TftPanel(tk.Frame):
             self.message.set("Cached data · refresh unavailable" if (self.data or {}).get("stale") else "")
         sorts = ["Source order"] + [name for name, key in SORT_KEYS.items()
                                     if any(_number(row.get(key)) is not None for row in self.rows)]
+        # An empty unit sample must not reset the user's item-sort preference.
+        if view == "items" and self.sort.get() in SORT_KEYS and self.sort.get() not in sorts:
+            sorts.append(self.sort.get())
         self.sort_box.configure(values=sorts)
         if self.sort.get() not in sorts and not (view == "items" and self.item_data is None):
             self.sort.set("Source order")

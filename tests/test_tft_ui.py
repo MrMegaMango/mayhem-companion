@@ -117,7 +117,7 @@ class PanelTests(unittest.TestCase):
     def test_item_tab_fetches_only_selected_unit_and_never_reuses_unit_overall_rates(self):
         self.panel.set_data(copy.deepcopy(DATA))
         self.panel.switch_view("items")
-        self.assertEqual(self.panel.sort.get(), "Games")
+        self.assertEqual(self.panel.sort.get(), "1st place")
         self.request_items.assert_called_once_with("unit-a")
         self.assertNotIn("3.90", self.texts())
         self.panel.set_items("unit-a", copy.deepcopy(BUILDS))
