@@ -1,4 +1,4 @@
-"""Read-only champion selection from the local League client (LCU).
+"""Read-only game-mode and champion selection from the local League client (LCU).
 
 The client supplies the schema through ``/help?format=Full``: a session's
 ``localPlayerCellId`` identifies one ``myTeam`` entry, whose ``championId``,
@@ -44,6 +44,15 @@ _SPELL_NAMES = {identifier: name for identifier, name in _SPELLS_BY_RAW_ID.value
 # Riot's queues.json identifies these ARAM queues, including Mayhem (2400).
 # A custom queue (0), or Howling Abyss map alone, does not identify ARAM.
 _ARAM_QUEUE_IDS = frozenset((65, 67, 100, 450, 720, 2400))
+# Riot's TFT Data Dragon 16.21.1 tft-queues.json plus public queues.json
+# identify these TFT queues. Never infer TFT from a numeric range or map ID.
+_TFT_QUEUE_IDS = frozenset((
+    1090, 1100, 1110, 1111, 1130, 1160, 1170, 1210, 1220,
+    6000, 6100, 6120, 6130,
+))
+# Verified in the local /lol-game-queues/v1/queues response. The public
+# gameModes.json omits TFT, so it is not treated as a League "other" mode.
+_TFT_MODES = frozenset(("TFT",))
 # KIWI was verified in the local Live Client API during a Mayhem custom game.
 _ARAM_MODES = frozenset(("ARAM", "KIWI"))
 # Public gameModes.json provides these non-ARAM mode tokens. Unknown future
@@ -61,8 +70,13 @@ def is_aram_mode(mode: Any) -> bool:
     return isinstance(mode, str) and mode.strip().upper() in _ARAM_MODES
 
 
+def is_tft_mode(mode: Any) -> bool:
+    """Recognize the verified TFT token; never use partial name matches."""
+    return isinstance(mode, str) and mode.strip().upper() in _TFT_MODES
+
+
 def _gameflow_context(session: Any) -> dict[str, Any]:
-    result = {"is_aram": None, "game_mode": None}
+    result = {"is_aram": None, "is_tft": None, "game_mode": None}
     if not isinstance(session, Mapping):
         return result
     game = session.get("gameData")
@@ -75,11 +89,14 @@ def _gameflow_context(session: Any) -> dict[str, Any]:
             continue
         mode = source.get("gameMode")
         mode = mode.strip().upper() if isinstance(mode, str) else None
-        if mode in _ARAM_MODES or mode in _OTHER_MODES:
-            result.update(is_aram=is_aram_mode(mode), game_mode=mode)
+        if mode in _ARAM_MODES or mode in _TFT_MODES or mode in _OTHER_MODES:
+            result.update(is_aram=is_aram_mode(mode), is_tft=is_tft_mode(mode), game_mode=mode)
             return result
-    if type(queue.get("id")) is int and queue["id"] in _ARAM_QUEUE_IDS:
-        result["is_aram"] = True
+    if type(queue.get("id")) is int:
+        if queue["id"] in _ARAM_QUEUE_IDS:
+            result.update(is_aram=True, is_tft=False)
+        elif queue["id"] in _TFT_QUEUE_IDS:
+            result.update(is_aram=False, is_tft=True)
     return result
 
 
@@ -173,7 +190,7 @@ def _get_json(opener, credentials: _Credentials, path: str, timeout: float) -> A
 def _client_state(status: str, message: str, phase: str | None = None) -> dict[str, Any]:
     result = _state(status, message)
     result.update(phase=phase if phase in _KNOWN_PHASES else None,
-                  champion_preview=False, is_aram=None)
+                  champion_preview=False, is_aram=None, is_tft=None)
     return result
 
 
@@ -261,7 +278,7 @@ class ClientReader:
             self._needs_discovery = True
             return _client_state("waiting", "Waiting for the League client.")
         phase = None
-        context = {"is_aram": None, "game_mode": None}
+        context = {"is_aram": None, "is_tft": None, "game_mode": None}
 
         def finish(result):
             result.update(context)
@@ -287,6 +304,10 @@ class ClientReader:
                     return _client_state("waiting", "Waiting for champion select.", phase)
             except (HTTPError, URLError, OSError, ValueError, TypeError, UnicodeError):
                 pass
+            # TFT uses the same League client phases, but has no League
+            # champion selection or guaranteed Live Client board API.
+            if context["is_tft"] is True:
+                return finish(_client_state("tft", "TFT session detected.", phase))
             if phase != "ChampSelect":
                 return finish(_client_state("waiting", "League game active.", phase))
             return finish(_session_state(_get_json(self._opener, credentials, _SESSION_PATH, timeout)))

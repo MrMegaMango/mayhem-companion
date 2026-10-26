@@ -24,6 +24,7 @@ from .data import resolve_champion_id
 from .displays import list_displays, select_display, place_panel
 from .tray import TrayIcon
 from .icons import IconLoader
+from .tft_ui import TftPanel
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -93,6 +94,12 @@ class Companion:
         self.inventory_champion = None
         self.inventory_current = False
         self.build_order_key = None
+        self.display_mode = "aram"
+        self.last_game_context = {}
+        self.tft_token = 0
+        self.tft_item_token = 0
+        self.tft_unit = None
+        self.tft_loaded = self.tft_pending = False
         self.build()
         self.icons = IconLoader(self.events, self.stop, self.storage / "cache" / "icons")
         self.icons.start()
@@ -133,7 +140,13 @@ class Companion:
         header = tk.Frame(self.shell, bg=BG)
         header.pack(fill="x", padx=16, pady=(12, 8))
         brand = self.label(header, "MAYHEM", 10, ACCENT, True)
+        self.brand = brand
         brand.pack(side="left")
+        self.mode_choice = tk.StringVar(value="Auto")
+        mode_box = ttk.Combobox(header, textvariable=self.mode_choice, state="readonly",
+                               values=["Auto", "ARAM", "TFT"], width=6)
+        mode_box.pack(side="left", padx=(10, 0))
+        mode_box.bind("<<ComboboxSelected>>", lambda _: self.change_game_mode())
         self.badge = self.label(header, "WAITING", 8, MUTED)
         self.badge.pack(side="left", padx=10)
         self.button(header, "×", self.close, BG).pack(side="right")
@@ -227,9 +240,61 @@ class Companion:
         self.button(buttons, "Clear", self.clear_offers).pack(side="left")
         self.button(buttons, "Retry data", lambda: self.requests.put(("retry", None))).pack(side="left", padx=6)
         self.label(buttons, "Ctrl+Alt+M  show / hide", 8, MUTED).pack(side="right")
+        self.tft_panel = TftPanel(self.shell, lambda: self.load_tft(force=True),
+                                  on_resize=lambda: self.root.after_idle(self.fit_window),
+                                  request_icon=self.request_tft_icon, request_items=self.load_tft_items)
         root.update_idletasks()
         x, y, height = self.panel_placement(self.shell.winfo_reqheight(), (x, y))
         root.geometry(f"440x{height}+{x}+{y}")
+
+    def request_tft_icon(self, url):
+        photo = self.item_images.get(url)
+        if url and photo is None:
+            self.icons.request(url)
+        return photo
+
+    def load_tft(self, force=False):
+        if self.tft_pending:
+            return
+        self.tft_token += 1
+        self.tft_item_token += 1
+        self.tft_unit = None
+        self.tft_pending = True
+        self.tft_panel.set_loading()
+        self.requests.put(("tft", (self.tft_token, force)))
+
+    def load_tft_items(self, unit, force=False):
+        self.tft_item_token += 1
+        self.tft_unit = unit
+        self.requests.put(("tft_items", (self.tft_item_token, unit, force)))
+
+    def set_game_mode(self, mode):
+        if mode == self.display_mode:
+            return
+        self.display_mode = mode
+        self.brand.configure(text="TFT" if mode == "tft" else "MAYHEM")
+        if mode == "tft":
+            self.body.pack_forget()
+            self.tft_panel.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+            self.load_tft()
+        else:
+            self.tft_panel.pack_forget()
+            self.body.pack(fill="both", expand=True, padx=16)
+            # Offers may have changed while the TFT reference was open.
+            self.requests.put(("scan", None))
+        self.root.after_idle(self.fit_window)
+
+    def change_game_mode(self):
+        choice = self.mode_choice.get()
+        mode = "tft" if choice == "TFT" or (choice == "Auto" and
+                   self.last_game_context.get("is_tft") is True) else "aram"
+        self.set_game_mode(mode)
+        if choice != "Auto":
+            self.set_manual_visible(True)
+        else:
+            self.visibility_override = None
+            self.browse_mode = False
+        self.handle_game(self.last_game_context)
 
     def start_drag(self, event):
         self.drag_start = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
@@ -798,10 +863,11 @@ class Companion:
     def update_visibility(self, game):
         phase = game.get("phase")
         active_phases = ("ChampSelect", "GameStart", "InProgress", "Reconnect")
-        in_match = (game.get("status") in ("champ_select", "live")
+        in_match = (game.get("status") in ("champ_select", "live", "tft")
                     or phase in active_phases)
-        visible = game.get("is_aram") is True and in_match
+        visible = (game.get("is_aram") is True or game.get("is_tft") is True) and in_match
         confirmed = (type(game.get("is_aram")) is bool
+                     or type(game.get("is_tft")) is bool
                      or (phase is not None and phase not in active_phases))
         if confirmed and visible != self.auto_visible:
             # A manual hide lasts through this match; a manual show outside a
@@ -810,6 +876,10 @@ class Companion:
             self.visibility_override = None
         if confirmed:
             self.auto_visible = visible
+        else:
+            # A known active phase may briefly lose queue metadata. With no
+            # phase at all, do not leave the panel on the desktop indefinitely.
+            visible = self.auto_visible and phase in active_phases
         if self.recovery_visible:
             self.set_visible(True)
         elif self.browse_mode:
@@ -858,6 +928,7 @@ class Companion:
             for item in self.build_core_items:
                 if item["icon_url"] == url:
                     item["icon"].configure(image=photo)
+            self.tft_panel.on_icon(url, photo)
         elif kind == "tray_action":
             if payload == "show":
                 self.show_from_tray()
@@ -889,7 +960,28 @@ class Companion:
             self.lookup_builds(force=True)
         elif kind == "game":
             self.handle_game(payload)
+        elif kind == "tft":
+            token, data = payload
+            if token == self.tft_token:
+                self.tft_pending = False
+                self.tft_loaded = True
+                self.tft_panel.set_data(data)
+        elif kind == "tft_error":
+            token, error = payload
+            if token == self.tft_token:
+                self.tft_pending = False
+                self.tft_panel.set_error(str(error)[:180])
+        elif kind == "tft_items":
+            token, unit, data = payload
+            if token == self.tft_item_token and unit == self.tft_unit:
+                self.tft_panel.set_items(unit, data)
+        elif kind == "tft_items_error":
+            token, unit, error = payload
+            if token == self.tft_item_token and unit == self.tft_unit:
+                self.tft_panel.set_items_error(unit, str(error)[:180])
         elif kind == "offers":
+            if self.display_mode == "tft":
+                return
             previously_active = self.offers_active
             if not payload:
                 self.offers_active = False
@@ -963,7 +1055,26 @@ class Companion:
             self.status.set(str(payload)[:180])
 
     def handle_game(self, game):
+        self.last_game_context = game
         self.update_visibility(game)
+        if self.mode_choice.get() == "Auto":
+            if game.get("is_tft") is True:
+                self.set_game_mode("tft")
+            elif game.get("is_aram") is True or game.get("is_tft") is False:
+                self.set_game_mode("aram")
+        if self.display_mode == "tft":
+            if game.get("status") == "tft" and self.game_status != "tft":
+                self.load_tft()
+            self.game_status = "tft" if game.get("status") == "tft" else "waiting"
+            self.game_live = self.champ_select = self.champion_preview = False
+            self.last_active_status = None
+            self.live_champion = None
+            self.live_items = self.inventory_champion = None
+            self.inventory_current = False
+            self.offers_active = False
+            self.badge.configure(text="LIVE" if game.get("status") == "tft" else "BROWSE",
+                                 fg=ACCENT if game.get("status") == "tft" else MUTED)
+            return
         previous_status = self.game_status
         self.game_status = game.get("status", "waiting")
         self.game_live = game.get("status") == "live"
@@ -1006,7 +1117,7 @@ class Companion:
                 self.champ_var.set(self.catalog["champions"][ident]["name"] if ident else "Auto detect champion")
                 # Levels do not reliably identify pending picks or extra-augment mechanics.
                 self.stage.set("All picks")
-            self.badge.configure(text="CHAMP SELECT" if self.champ_select else "LIVE" if ident else "WAITING",
+            self.badge.configure(text="SELECT" if self.champ_select else "LIVE" if ident else "WAITING",
                                  fg=ACCENT if active else MUTED)
             if active and self.game_status != previous_active_status:
                 if self.champ_select:
@@ -1059,6 +1170,11 @@ class Companion:
             "Ctrl+Alt+M   Show / hide\nCtrl+Alt+L   Toggle click-through\nCtrl+Alt+S   Resume scanning\n\n"
             "The panel appears for ARAM and Mayhem champion select and matches, then hides after the match. "
             "Ctrl+Alt+M can open it manually outside a match.\n\n"
+            "The header's Auto / ARAM / TFT selector follows the game or opens either reference manually. "
+            "TFT appears when a TFT game starts and uses separate TFT data. Comps and items show "
+            "average placement, top-four and first-place rates when published. Augment help is an "
+            "expert tier/reference lookup, not augment win rates. The displayed queue and rank identify "
+            "the sample. This version does not read your TFT board or automatically choose a comp.\n\n"
             "The M icon in the Windows tray also opens the panel. Right-click it for Show, Hide, or Exit. "
             "Showing from the tray unlocks click-through controls.\n\n"
             "Start with League in the tray menu enables a small Windows sign-in watcher. "

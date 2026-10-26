@@ -193,6 +193,60 @@ class ReaderTests(unittest.TestCase):
             self.assertEqual(result["game_mode"], "KIWI")
             self.assertEqual(self.http.call_count, 2)
 
+    def test_tft_active_phases_return_only_mode_without_champion_selection_read(self):
+        for phase in ("ChampSelect", "GameStart", "InProgress", "Reconnect"):
+            with self.subTest(phase=phase):
+                self.http.reset_mock()
+                self.http.side_effect = [phase, gameflow("TFT", 1100, phase)]
+                result = self.reader.poll()
+                self.assertEqual(result["status"], "tft")
+                self.assertEqual(result["phase"], phase)
+                self.assertTrue(result["is_tft"])
+                self.assertFalse(result["is_aram"])
+                self.assertEqual(result["game_mode"], "TFT")
+                self.assertIsNone(result["champion_id"])
+                self.assertEqual(result["summoner_spells"], [])
+                self.assertEqual([c.args[2] for c in self.http.call_args_list],
+                                 [client._PHASE_PATH, client._GAMEFLOW_PATH])
+                self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_tft_queue_without_mode_skips_champion_selection(self):
+        self.http.side_effect = ["ChampSelect", gameflow(None, 1160)]
+        result = self.reader.poll()
+        self.assertEqual(result["status"], "tft")
+        self.assertTrue(result["is_tft"])
+        self.assertFalse(result["is_aram"])
+        self.assertIsNone(result["game_mode"])
+        self.assertEqual(self.http.call_count, 2)
+
+    def test_tft_mode_does_not_survive_inactive_phase_or_failed_metadata(self):
+        self.http.side_effect = ["InProgress", gameflow("TFT", 1100, "InProgress"),
+                                 "Lobby", "InProgress", URLError("PRIVATE-TOKEN")]
+        self.assertTrue(self.reader.poll()["is_tft"])
+        for _ in range(2):
+            result = self.reader.poll()
+            self.assertEqual(result["status"], "waiting")
+            self.assertIsNone(result["is_tft"])
+            self.assertIsNone(result["is_aram"])
+            self.assertIsNone(result["game_mode"])
+
+    def test_tft_transition_to_aram_replaces_mode_and_champion_context(self):
+        self.http.side_effect = ["InProgress", gameflow("TFT", 1100, "InProgress"),
+                                 "ChampSelect", gameflow(), session(22)]
+        self.assertTrue(self.reader.poll()["is_tft"])
+        result = self.reader.poll()
+        self.assertEqual(result["status"], "champ_select")
+        self.assertTrue(result["is_aram"])
+        self.assertFalse(result["is_tft"])
+        self.assertEqual(result["champion_id"], "22")
+
+    def test_tft_newer_inactive_phase_does_not_report_active_tft(self):
+        self.http.side_effect = ["InProgress", gameflow("TFT", 1100, "EndOfGame")]
+        result = self.reader.poll()
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(result["phase"], "EndOfGame")
+        self.assertIsNone(result["is_tft"])
+
     def test_inactive_phase_reads_no_session_and_forgets_previous_mode(self):
         self.http.side_effect = ["ChampSelect", gameflow(), session(), "EndOfGame", "None", "Lobby"]
         self.assertTrue(self.reader.poll()["is_aram"])
@@ -260,6 +314,44 @@ class GameflowContextTests(unittest.TestCase):
         for mode in (None, {}, True, "CLASSIC", "ARAM_RANKED", "ARAM Mayhem", ""):
             self.assertFalse(client.is_aram_mode(mode))
 
+    def test_tft_mode_helper_accepts_only_verified_exact_token(self):
+        for mode in ("TFT", "tft", " TFT "):
+            self.assertTrue(client.is_tft_mode(mode))
+        for mode in (None, {}, True, "ARAM", "CLASSIC", "RANKED_TFT", "TFT_DOUBLE_UP", ""):
+            self.assertFalse(client.is_tft_mode(mode))
+
+    def test_tft_mode_is_distinct_from_aram_and_accepts_unknown_future_queue(self):
+        for queue_id in (0, 1100, 99999):
+            self.assertEqual(client._gameflow_context(gameflow("TFT", queue_id)),
+                             {"is_aram": False, "is_tft": True, "game_mode": "TFT"})
+
+    def test_official_tft_queue_fallback_does_not_infer_from_range(self):
+        for queue_id in (1090, 1100, 1110, 1111, 1130, 1160, 1170, 1210, 1220,
+                         6000, 6100, 6120, 6130):
+            with self.subTest(queue_id=queue_id):
+                self.assertEqual(client._gameflow_context(gameflow(None, queue_id)),
+                                 {"is_aram": False, "is_tft": True, "game_mode": None})
+        for queue_id in (1091, 1120, 1140, 1200, 1230, "1100", True, 1100.0):
+            self.assertIsNone(client._gameflow_context(gameflow(None, queue_id))["is_tft"])
+
+    def test_tft_map_mode_takes_priority_and_known_other_modes_override_queue(self):
+        custom = gameflow("CLASSIC", 0)
+        custom["map"] = {"id": 22, "gameMode": "TFT"}
+        self.assertEqual(client._gameflow_context(custom),
+                         {"is_aram": False, "is_tft": True, "game_mode": "TFT"})
+        for mode in ("CLASSIC", "ARAM", "KIWI"):
+            self.assertFalse(client._gameflow_context(gameflow(mode, 1100))["is_tft"])
+        self.assertTrue(client._gameflow_context(gameflow("TFT", 450))["is_tft"])
+
+    def test_tft_is_not_inferred_from_map_or_partial_mode(self):
+        for mode in (None, "RANKED_TFT", "TFT_DOUBLE_UP", "PRIVATE-TFT"):
+            data = gameflow(mode, 0)
+            data["map"] = {"id": 22, "gameMode": mode}
+            result = client._gameflow_context(data)
+            self.assertIsNone(result["is_tft"])
+            self.assertIsNone(result["is_aram"])
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
     def test_official_aram_queue_fallback_includes_mayhem_and_clash(self):
         for queue_id in (65, 67, 100, 450, 720, 2400):
             context = client._gameflow_context(gameflow(None, queue_id))
@@ -277,12 +369,12 @@ class GameflowContextTests(unittest.TestCase):
     def test_custom_selected_map_mode_takes_priority_over_generic_queue(self):
         custom = gameflow("CLASSIC", 0)
         custom["map"] = {"id": 12, "gameMode": "ARAM"}
-        self.assertEqual(client._gameflow_context(custom), {"is_aram": True, "game_mode": "ARAM"})
+        self.assertEqual(client._gameflow_context(custom), {"is_aram": True, "is_tft": False, "game_mode": "ARAM"})
         self.assertTrue(client._gameflow_context({"map": {"gameMode": "KIWI"}})["is_aram"])
 
     def test_known_other_mode_wins_over_conflicting_queue_id(self):
         self.assertEqual(client._gameflow_context(gameflow("CLASSIC", 450)),
-                         {"is_aram": False, "game_mode": "CLASSIC"})
+                         {"is_aram": False, "is_tft": False, "game_mode": "CLASSIC"})
 
     def test_unknown_and_malformed_metadata_is_not_assumed_aram(self):
         for data in (None, [], {}, {"gameData": []}, {"gameData": {"queue": []}},

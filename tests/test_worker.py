@@ -110,6 +110,85 @@ class SpellWorkerTests(unittest.TestCase):
             self.assertIsNone(worker.poll_game()["champion_id"])
         live.assert_not_called()
 
+    def test_tft_uses_lcu_only_and_clears_aram_offers_without_running_ocr(self):
+        selection = {"status": "tft", "is_tft": True, "is_aram": False, "phase": "InProgress"}
+        self.client.poll.return_value = selection
+        events, requests, stop = queue.Queue(), queue.Queue(), Mock()
+        stop.wait.side_effect = [False, True]
+        with patch("mayhem.worker.StatsProvider"), patch("mayhem.worker.poll_active_player") as live, \
+                patch("mayhem.worker.CaptureReader") as capture, patch("mayhem.worker.TftProvider") as tft:
+            worker = Worker(events, requests, stop, ".")
+            worker.last_offers = ("1", "2", "3")
+            worker.run()
+        self.assertIn(("game", selection), list(events.queue))
+        self.assertIn(("offers", []), list(events.queue))
+        live.assert_not_called()
+        capture.return_value.scan.assert_not_called()
+        tft.assert_not_called()
+
+    def test_tft_request_uses_separate_provider_and_returns_matching_token(self):
+        events, requests, stop = queue.Queue(), queue.Queue(), Mock()
+        stop.wait.side_effect = [False, True]
+        requests.put(("tft", (12, True)))
+        data = {"source": "TFT source", "comps": []}
+        with patch("mayhem.worker.StatsProvider") as aram, patch("mayhem.worker.TftProvider") as tft, \
+                patch("mayhem.worker.threading.Thread") as thread, \
+                patch("mayhem.worker.poll_active_player", return_value={"status": "waiting"}):
+            tft.return_value.load.return_value = data
+            worker = Worker(events, requests, stop, ".")
+            worker.run()
+            tft.assert_not_called()  # TFT HTTP cannot block the polling/OCR thread.
+            thread.return_value.start.assert_called_once()
+            worker.perform_tft_task(*worker.tft_requests.get_nowait())
+        tft.return_value.load.assert_called_once_with(force=True)
+        self.assertIn(("tft", (12, data)), list(events.queue))
+        aram.return_value.item_builds_for.assert_not_called()
+
+    def test_explicit_live_tft_mode_fallback_never_exposes_little_legend_as_aram_champion(self):
+        with patch("mayhem.worker.StatsProvider"), patch("mayhem.worker.poll_active_player",
+                return_value={"status": "live", "game_mode": "TFT", "champion_name": "Little Legend"}):
+            worker = Worker(queue.Queue(), queue.Queue(), Mock(), ".")
+            result = worker.poll_game()
+        self.assertEqual(result["status"], "tft")
+        self.assertTrue(result["is_tft"])
+        self.assertFalse(result["is_aram"])
+        self.assertIsNone(result["champion_name"])
+
+    def test_lingering_tft_api_cannot_be_merged_into_new_aram_context(self):
+        selection = {"status": "waiting", "phase": "GameStart", "is_tft": False,
+                     "is_aram": True, "game_mode": "KIWI"}
+        self.client.poll.return_value = selection
+        with patch("mayhem.worker.StatsProvider"), patch("mayhem.worker.poll_active_player",
+                return_value={"status": "live", "game_mode": "TFT", "champion_name": "Little Legend"}):
+            worker = Worker(queue.Queue(), queue.Queue(), Mock(), ".")
+            self.assertEqual(worker.poll_game(), selection)
+
+    def test_tft_error_is_scoped_and_polling_continues(self):
+        events, requests, stop = queue.Queue(), queue.Queue(), Mock()
+        stop.wait.side_effect = [False, True]
+        requests.put(("tft", (12, False)))
+        with patch("mayhem.worker.StatsProvider"), patch("mayhem.worker.TftProvider") as tft, \
+                patch("mayhem.worker.threading.Thread"), \
+                patch("mayhem.worker.poll_active_player", return_value={"status": "waiting"}):
+            tft.return_value.load.side_effect = ValueError("No TFT data")
+            worker = Worker(events, requests, stop, ".")
+            worker.run()
+            worker.perform_tft_task(*worker.tft_requests.get_nowait())
+        self.assertIn(("tft_error", (12, "No TFT data")), list(events.queue))
+        self.assertTrue(any(kind == "game" for kind, _ in events.queue))
+
+    def test_tft_item_lookup_keeps_unit_token_and_errors_separate(self):
+        events, requests = queue.Queue(), queue.Queue()
+        with patch("mayhem.worker.StatsProvider"), patch("mayhem.worker.TftProvider") as tft:
+            worker = Worker(events, requests, Mock(), ".")
+            data = {"unit_id": "Ahri", "rows": []}
+            tft.return_value.items_for.return_value = data
+            worker.perform_tft_task("tft_items", (7, "Ahri"))
+            tft.return_value.items_for.side_effect = ValueError("No unit sample")
+            worker.perform_tft_task("tft_items", (8, "Akali"))
+        self.assertIn(("tft_items", (7, "Ahri", data)), list(events.queue))
+        self.assertIn(("tft_items_error", (8, "Akali", "No unit sample")), list(events.queue))
+
     def test_live_detection_survives_unavailable_client(self):
         self.client.poll.return_value = {"status": "error"}
         with patch("mayhem.worker.StatsProvider"), \

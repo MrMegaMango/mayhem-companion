@@ -68,6 +68,15 @@ class StateTests(unittest.TestCase):
         app.live_items = None
         app.inventory_champion = None
         app.inventory_current = False
+        app.display_mode = "aram"
+        app.last_game_context = {}
+        app.tft_token = 0
+        app.tft_item_token = 0
+        app.tft_unit = None
+        app.tft_loaded = app.tft_pending = False
+        app.mode_choice = Mock()
+        app.mode_choice.get.return_value = "Auto"
+        app.tft_panel, app.brand, app.body = Mock(), Mock(), Mock()
         app.item_images = {}
         app.icons = Mock()
         app.build_group, app.build_sort = Mock(), Mock()
@@ -92,6 +101,96 @@ class StateTests(unittest.TestCase):
         app.handle_game({"status": "live", "raw_champion": "game_character_displayname_Yasuo"})
         self.assertEqual(app.champion, "157")
         self.assertFalse(app.worker.provider.mock_calls)
+
+    def test_tft_auto_mode_loads_its_own_panel_once_and_stays_on_vertical_placement_path(self):
+        app = self.make_view()
+        tft = {"status": "tft", "is_tft": True, "is_aram": False, "phase": "InProgress"}
+        app.handle_game(tft)
+        app.handle_game(tft)
+        self.assertEqual(app.display_mode, "tft")
+        self.assertFalse(app.hidden)
+        app.body.pack_forget.assert_called_once()
+        app.tft_panel.pack.assert_called_once()
+        self.assertEqual(list(app.requests.queue), [("tft", (1, False))])
+        app.fit_window.assert_called()
+        self.assertFalse(app.game_live)
+        self.assertIsNone(app.live_champion)
+
+    def test_tft_failure_does_not_retry_every_game_poll_and_manual_retry_preserves_token(self):
+        app = self.make_view()
+        tft = {"status": "tft", "is_tft": True, "is_aram": False, "phase": "InProgress"}
+        app.handle_game(tft)
+        app.handle_event("tft_error", (1, "Offline"))
+        for _ in range(4):
+            app.handle_game(tft)
+        self.assertEqual(app.requests.qsize(), 1)
+        app.load_tft(force=True)
+        self.assertEqual(app.tft_token, 2)
+        app.handle_event("tft", (1, {"source": "old"}))
+        app.tft_panel.set_data.assert_not_called()
+        data = {"source": "current"}
+        app.handle_event("tft", (2, data))
+        app.tft_panel.set_data.assert_called_once_with(data)
+
+    def test_aram_after_tft_restores_aram_panel_and_spells_without_tft_data(self):
+        app = self.make_view()
+        app.handle_game({"status": "tft", "is_tft": True, "phase": "InProgress"})
+        app.handle_game({"status": "champ_select", "is_tft": False, "is_aram": True,
+                         "phase": "ChampSelect", "champion_id": "157"})
+        self.assertEqual(app.display_mode, "aram")
+        app.tft_panel.pack_forget.assert_called_once()
+        self.assertEqual(app.champion, "157")
+        app.switch_view.assert_called_with("spells", automatic=True)
+        self.assertIn(("scan", None), list(app.requests.queue))
+
+    def test_tft_visibility_hides_at_end_but_retains_manual_hide_and_transient_context(self):
+        app = self.make_view()
+        tft = {"status": "tft", "phase": "InProgress", "is_tft": True, "is_aram": False}
+        app.update_visibility(tft)
+        app.update_visibility({"status": "error", "is_tft": None, "is_aram": None, "phase": "InProgress"})
+        self.assertFalse(app.hidden)
+        app.toggle_visible()
+        app.update_visibility(tft)
+        self.assertTrue(app.hidden)
+        app.update_visibility({"status": "waiting", "phase": "EndOfGame"})
+        app.update_visibility(tft)
+        self.assertFalse(app.hidden)
+        app.update_visibility({"status": "waiting", "phase": "EndOfGame"})
+        self.assertTrue(app.hidden)
+
+    def test_manual_tft_browsing_does_not_receive_aram_augment_choices(self):
+        app = self.make_view()
+        app.mode_choice.get.return_value = "TFT"
+        app.change_game_mode()
+        app.handle_event("offers", [{"id": "new-aram-offer"}])
+        self.assertEqual(app.display_mode, "tft")
+        app.switch_view.assert_not_called()
+        app.tft_panel.set_offers.assert_not_called()
+
+    def test_tft_item_results_require_current_unit_and_token_and_reload_invalidates_them(self):
+        app = self.make_view()
+        app.load_tft_items("Ahri")
+        app.load_tft_items("Akali")
+        app.handle_event("tft_items", (1, "Ahri", {"rows": []}))
+        app.handle_event("tft_items", (2, "Ahri", {"rows": []}))
+        app.tft_panel.set_items.assert_not_called()
+        app.handle_event("tft_items", (2, "Akali", {"rows": []}))
+        app.tft_panel.set_items.assert_called_once_with("Akali", {"rows": []})
+        app.load_tft(force=True)
+        app.handle_event("tft_items_error", (2, "Akali", "old failure"))
+        app.tft_panel.set_items_error.assert_not_called()
+
+    def test_return_to_auto_leaves_manual_browsing_and_hides_in_lobby(self):
+        app = self.make_view()
+        app.last_game_context = {"status": "waiting", "phase": "Lobby"}
+        app.mode_choice.get.return_value = "TFT"
+        app.change_game_mode()
+        self.assertFalse(app.hidden)
+        app.mode_choice.get.return_value = "Auto"
+        app.change_game_mode()
+        self.assertTrue(app.hidden)
+        self.assertIsNone(app.visibility_override)
+        self.assertFalse(app.browse_mode)
 
     def test_portrait_preference_moves_old_primary_position_to_selected_display(self):
         app = self.make_view()
@@ -388,7 +487,7 @@ class StateTests(unittest.TestCase):
         self.assertTrue(app.champ_select)
         self.assertEqual(app.live_spells[0]["id"], "4")
         app.switch_view.assert_called_once_with("spells", automatic=True)
-        self.assertEqual(app.badge.configure.call_args.kwargs["text"], "CHAMP SELECT")
+        self.assertEqual(app.badge.configure.call_args.kwargs["text"], "SELECT")
         self.assertEqual(app.requests.get_nowait(), ("spells", (8, "157")))
 
     def test_champion_trade_invalidates_old_pair_data_and_fetches_new_champion(self):

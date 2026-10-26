@@ -5,10 +5,11 @@ import threading
 import time
 
 from .capture import CaptureReader
-from .client import ClientReader, is_aram_mode
+from .client import ClientReader, is_aram_mode, is_tft_mode
 from .data import StatsProvider
 from .game import poll_active_player
 from .matching import detect_offers
+from .tft_data import TftProvider
 
 
 class Worker(threading.Thread):
@@ -21,6 +22,10 @@ class Worker(threading.Thread):
         super().__init__(daemon=True, name="mayhem-reader")
         self.output, self.requests, self.stop = output, requests, stop
         self.provider = StatsProvider(cache)
+        self.tft_provider = None
+        self.cache = cache
+        self.tft_requests = queue.Queue()
+        self.tft_thread = None
         self.catalog = None
         self.capture = CaptureReader()
         self.client = ClientReader()
@@ -40,10 +45,49 @@ class Worker(threading.Thread):
         self.catalog = self.provider.load_catalog()
         self.emit("catalog", self.catalog)
 
+    def perform_tft_task(self, task, payload):
+        token = payload[0]
+        try:
+            if self.tft_provider is None:
+                self.tft_provider = TftProvider(self.cache)
+            if task == "tft":
+                self.emit("tft", (token, self.tft_provider.load(force=payload[1])))
+            else:
+                unit = payload[1]
+                force = payload[2] if len(payload) > 2 else False
+                self.emit("tft_items", (token, unit, self.tft_provider.items_for(unit, force=force)))
+        except Exception as exc:
+            if task == "tft":
+                self.emit("tft_error", (token, str(exc)))
+            else:
+                self.emit("tft_items_error", (token, payload[1], str(exc)))
+
+    def run_tft_data(self):
+        # TFT catalogs/comps can be larger than an ARAM lookup. Keep those
+        # requests serialized on their own thread so local polling/OCR continue.
+        while not self.stop.is_set():
+            try:
+                task, payload = self.tft_requests.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                if not self.stop.is_set():
+                    self.perform_tft_task(task, payload)
+            finally:
+                self.tft_requests.task_done()
+
+    def queue_tft_task(self, task, payload):
+        self.tft_requests.put((task, payload))
+        if self.tft_thread is None:
+            self.tft_thread = threading.Thread(target=self.run_tft_data, name="mayhem-tft-data", daemon=True)
+            self.tft_thread.start()
+
     def poll_game(self):
         # The lobby exposes the champion while spells can still be changed.
         # Keep the in-game API as the source once champion select has ended.
         selection = self.client.poll()
+        if selection.get("is_tft") is True or selection.get("status") == "tft":
+            return selection
         if selection.get("status") == "champ_select":
             return selection
         phase = selection.get("phase")
@@ -56,6 +100,17 @@ class Worker(threading.Thread):
             # Keep ARAM context while the game loads or reconnects.
             return selection
         game["phase"] = phase
+        if is_tft_mode(game.get("game_mode")):
+            if selection.get("is_tft") is False:
+                # A previous game's local API can linger during a new game's
+                # load. Do not combine its TFT player payload with ARAM context.
+                return selection
+            # This is only a mode fallback; TFT boards/items are not League
+            # champion context and must never enter the ARAM lookup path.
+            game.update(status="tft", is_tft=True, is_aram=False,
+                        champion_id=None, champion_name=None, raw_champion=None,
+                        summoner_spells=[], item_ids=None)
+            return game
         known_mode = selection.get("is_aram")
         game["is_aram"] = (known_mode if known_mode is not None else
                            is_aram_mode(game.get("game_mode")) if game.get("game_mode") else None)
@@ -101,6 +156,8 @@ class Worker(threading.Thread):
                             self.emit("builds", (token, self.provider.item_builds_for(champion)))
                         except Exception as exc:
                             self.emit("builds_error", (token, str(exc)))
+                    elif task in ("tft", "tft_items"):
+                        self.queue_tft_task(task, payload)
             except queue.Empty:
                 pass
             except Exception as exc:

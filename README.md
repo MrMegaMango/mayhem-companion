@@ -1,12 +1,14 @@
 # Mayhem Companion
 
-A personal Windows prototype that reads your current League champion and the visible ARAM Mayhem augment titles, then shows that champion's augment, core-item-build and summoner-spell-pair win rates from ARAMKit.
+A personal Windows companion for ARAM Mayhem and TFT. ARAM mode reads your current League champion and visible augment titles, then shows champion-specific augment, item-build and spell-pair win rates from ARAMKit. TFT mode provides composition statistics, unit-specific three-item builds, and augment reference/expert tiers.
 
 ## Start
 
 Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows treats a WSL/network path as an unsigned remote script, copy the project to a local Windows folder before running setup. Open **Mayhem Companion** from the desktop shortcut. Installed files live in `%USERPROFILE%\MayhemCompanion`; the development source can remain in WSL.
 
-The companion starts hidden and waits in the background. It appears automatically when you enter **ARAM or ARAM Mayhem champion select**, stays available through loading and the match, and hides when the match ends or you leave champion select. Other queues and the ordinary lobby do not open it. Custom games are recognized by their actual ARAM/Mayhem mode. **Ctrl+Alt+M** opens or hides it manually; hiding it during a match lasts until that match ends. Start with `--browse` to keep manual browsing available outside matches. Closing with × exits the background companion.
+The companion starts hidden and waits in the background. It appears automatically when you enter **ARAM or ARAM Mayhem champion select**, or when **TFT starts**, stays available through loading and the match, and hides when the match ends or you leave champion select. Other games and the ordinary lobby do not open it. Custom games are recognized by their actual mode. **Ctrl+Alt+M** opens or hides it manually; hiding it during a match lasts until that match ends. Start with `--browse` to keep manual browsing available outside matches. Closing with × exits the background companion.
+
+The header's **Auto / ARAM / TFT** selector follows the detected game by default. Choose ARAM or TFT to browse either reference manually. TFT uses the same tray, League startup watcher and preferred portrait monitor.
 
 The **M icon in the Windows notification area** remains available while the panel is hidden. Click it to show the panel, or right-click for **Show companion**, **Hide companion**, and **Exit**. Showing from the tray also unlocks click-through controls. Windows may place the icon in its hidden-icons menu. Exit removes the icon and stops the background companion.
 
@@ -29,6 +31,10 @@ Turn on **Start with League** in the tray menu to launch automatically when the 
 ## Data
 
 Data source: [ARAMKit](https://aramkit.com/en-US), using its public version manifest, champion/augment catalogs and the currently selected champion's stats. The app downloads catalog data, requested champions and icons for displayed items, caches immutable snapshots, and checks the manifest at most daily. No key or account is needed.
+
+TFT composition and item-build statistics come from [Tactics.tools](https://tactics.tools/team-compositions). **Comps** shows archetype outcomes and a common board variation, with unit icons, average placement, top-four rate, first-place rate, and games. **Item builds** loads exact three-item sets for the selected unit on demand; those rates are not the unit's overall rate. The displayed sample is **Ranked, Diamond+** and is explicitly labeled even if you are playing another TFT queue. Source patch, set and dataset update time are shown. Comps are manually browsed; this version does not read your board, shop or opponents.
+
+TFT **Augments** provides descriptions and, when the current set matches, [MetaTFT's expert tier list](https://www.metatft.com/augments). Use **Compare 3** to enter the choices you see. Expert tiers are not augment win rates, and unrated augments remain reference-only. TFT augment choices are entered manually in this version. TFT datasets are cached for an hour, refreshes run separately from local polling/OCR, and unavailable data uses a labeled cached snapshot when a valid fallback exists. Unit builds and artwork are fetched only as needed.
 
 Build cards show each item's icon beside its name. Icons come from the matching ARAMKit item catalog, download on a separate background thread, and are cached locally. Missing or unavailable icons leave the item names and statistics usable and do not delay augment scanning.
 
@@ -65,5 +71,7 @@ Champion-select fields were checked against the running client's own API schema.
 Build statistics were checked against live ARAMKit champion data. The native Tk panel was exercised with real core sets and simulated champion-select, live-play, augment-open and augment-dismissed events. Tests cover stale build responses, missing data, coherent snapshot fallback, manual tab ownership and reroll/rescan stability. The new automatic Builds handoff has not yet been verified during a live match.
 
 The follow-up panel was verified on the portrait monitor using real cached Brand statistics and simulated purchases/sales from two to three to four completed items and back. Icons, purchase-order selection, transformed-item matching, missing inventory, owned-item exclusion, and returning from Augments are covered by native or automated checks. The new inventory-driven switch has not yet been verified in a live match.
+
+TFT source checks used current published data: 36 composition groups, 74 units and 249 augment references, plus exact three-item builds fetched for selected units. All three native views and their icons were visually checked on the portrait monitor with real source data. Simulated TFT-to-ARAM transitions, match-end hiding, manual/Auto visibility, conflicting mode data, duplicate names, stale replies and cached fallback are tested. TFT mode/queue identifiers were checked against the running client's queue metadata and Riot's queue catalog. A full live TFT match has not yet been used for end-to-end verification.
 
 Mayhem Companion is not endorsed by Riot Games and does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.

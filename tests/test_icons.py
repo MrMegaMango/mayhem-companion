@@ -159,6 +159,26 @@ class IconLoaderTests(unittest.TestCase):
         self.assertFalse(loader.request(URL))
         self.assertTrue(loader._requests.empty())
 
+    def test_tft_artwork_uses_the_same_nonblocking_cache_with_exact_public_asset_paths(self):
+        loader, output, _ = self.loader()
+        urls = ["https://ap.tft.tools/img/gg17/face/da_18_akali_ad.jpg?w=64",
+                "https://ap.tft.tools/img/items_s14/DA_InfinityEdge.png?w=64",
+                "https://ap.tft.tools/img/augments/DA_AugmentedPower1.png?w=64"]
+        for url in urls:
+            self.assertTrue(loader.request(url))
+        self.assertEqual({output.get(timeout=2)[1][0] for _ in urls}, set(urls))
+        for url in urls:
+            self.assertTrue(loader._cache_path(url).is_file())
+
+    def test_tft_asset_allowlist_rejects_other_hosts_paths_and_queries(self):
+        loader, _, _ = self.loader(start=False)
+        url = "https://ap.tft.tools/img/items_s14/DA_InfinityEdge.png?w=64"
+        for invalid in (url.replace("ap.tft.tools", "example.com"), url.replace("https:", "http:"),
+                        url.replace("/img/", "/private/"), url + "&redirect=example.com",
+                        url.replace("?w=64", "?w=99999"), url.replace("DA_InfinityEdge", "../secret")):
+            self.assertFalse(loader.request(invalid))
+        loader._download.assert_not_called()
+
     def test_decoder_rejects_excessive_bytes_dimensions_and_unsupported_format(self):
         for payload in (b"x" * (icons.MAX_DOWNLOAD_BYTES + 1),
                         picture((icons.MAX_IMAGE_EDGE + 1, 1)), picture(format="GIF")):
