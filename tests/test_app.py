@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import queue
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from mayhem.app import Companion
 
@@ -39,16 +39,28 @@ class StateTests(unittest.TestCase):
         app.lock_button = Mock()
         app.game_live = True
         app.game_status = "live"
+        app.last_active_status = "live"
         app.champ_select = app.champion_preview = False
         app.switch_view = Mock()
         app.fit_window = Mock()
         app.token = 5
         app.is_auto_offer = True
+        app.offers_active = True
+        app.view_automatic = True
         app.offer_ids = ["1", "2", "3"]
         app.cards = [{"var": Mock(), "value": Mock(), "meta": Mock()} for _ in range(3)]
         app.spell_token = 7
         app.spell_champion = "157"
         app.spell_data = None
+        app.build_token = 9
+        app.build_champion = "157"
+        app.build_data = None
+        app.build_cards = [{"frame": Mock(), "names": Mock(), "value": Mock(), "meta": Mock()} for _ in range(5)]
+        app.build_group, app.build_sort = Mock(), Mock()
+        app.build_group.get.return_value = "AP"
+        app.build_sort.get.return_value = "Games"
+        app.build_group_box = MagicMock()
+        app.build_summary, app.build_note, app.build_note_label = Mock(), Mock(), Mock()
         app.live_spells = []
         app.spell_tree = Mock()
         app.spell_tree.get_children.return_value = []
@@ -304,7 +316,7 @@ class StateTests(unittest.TestCase):
         self.assertFalse(app.game_live)
         self.assertTrue(app.champ_select)
         self.assertEqual(app.live_spells[0]["id"], "4")
-        app.switch_view.assert_called_once_with("spells")
+        app.switch_view.assert_called_once_with("spells", automatic=True)
         self.assertEqual(app.badge.configure.call_args.kwargs["text"], "CHAMP SELECT")
         self.assertEqual(app.requests.get_nowait(), ("spells", (8, "157")))
 
@@ -323,7 +335,7 @@ class StateTests(unittest.TestCase):
         app.handle_game({"status": "champ_select", "champion_id": None})
         self.assertIsNone(app.champion)
         self.assertEqual(app.offer_ids, [None, None, None])
-        app.switch_view.assert_called_once_with("spells")
+        app.switch_view.assert_called_once_with("spells", automatic=True)
 
     def test_unknown_champion_id_does_not_reuse_last_champion(self):
         app = self.make_view()
@@ -335,9 +347,9 @@ class StateTests(unittest.TestCase):
         selection = {"status": "champ_select", "champion_id": "157"}
         app.handle_game(selection)
         app.handle_game(selection)
-        app.switch_view.assert_called_once_with("spells")
+        app.switch_view.assert_called_once_with("spells", automatic=True)
         app.handle_game({"status": "live", "champion_name": "Yasuo"})
-        self.assertEqual(app.switch_view.call_args.args, ("augments",))
+        app.switch_view.assert_called_with("builds", automatic=True)
         app.follow = False
         app.switch_view.reset_mock()
         app.handle_game({"status": "champ_select", "champion_id": None})
@@ -389,6 +401,7 @@ class StateTests(unittest.TestCase):
         app.champion = "41"
         app.lookup()
         self.assertEqual(app.requests.get_nowait(), ("spells", (8, "41")))
+        self.assertEqual(app.requests.get_nowait(), ("builds", (10, "41")))
         app.lookup()
         self.assertTrue(app.requests.empty())
 
@@ -476,6 +489,136 @@ class StateTests(unittest.TestCase):
         self.assertIn("Scan paused", message)
         self.assertIn("Ctrl+Alt+L to unlock", message)
         self.assertEqual(app.offer_ids, ["1", "2", "3"])
+
+    def test_confirmed_choice_boundaries_switch_once_and_rerolls_keep_manual_tab(self):
+        app = self.make_view()
+        app.catalog["augments"] = {"1": {"name": "Goliath"}, "2": {"name": "Tank Engine"}}
+        app.offers_active = False
+        app.view.get.return_value = "builds"
+        app.lookup = Mock()
+        app.handle_event("offers", [{"id": "1"}])
+        app.switch_view.assert_called_once_with("augments", automatic=True)
+        app.switch_view.reset_mock()
+        # A reroll updates rates without pulling the user off another tab.
+        app.handle_event("offers", [{"id": "2"}])
+        app.switch_view.assert_not_called()
+        app.lookup.assert_called_once()
+        app.view.get.return_value = "augments"
+        app.handle_event("offers", [])
+        app.switch_view.assert_called_once_with("builds", automatic=True)
+        app.switch_view.reset_mock()
+        app.handle_event("offers", [])
+        app.switch_view.assert_not_called()
+
+    def test_manual_tab_or_manual_champion_is_not_changed_when_choices_end(self):
+        for manual_view, follow in ((True, True), (False, False)):
+            app = self.make_view()
+            app.view_automatic = not manual_view
+            app.follow = follow
+            app.handle_event("offers", [])
+            app.switch_view.assert_not_called()
+
+    def test_manual_augment_edit_does_not_rearm_choice_detection(self):
+        app = self.make_view()
+        app.catalog["augments"] = {"1": {"name": "Goliath"}}
+        app.is_auto_offer = False
+        app.view_automatic = False
+        app.lookup = Mock()
+        app.handle_event("offers", [{"id": "1"}])
+        app.switch_view.assert_not_called()
+        app.handle_event("offers", [])
+        app.switch_view.assert_not_called()
+
+    def test_manual_champion_receives_choices_without_changing_build_tab(self):
+        app = self.make_view()
+        app.follow = app.offers_active = False
+        app.view.get.return_value = "builds"
+        app.catalog["augments"] = {"1": {"name": "Goliath"}}
+        app.lookup = Mock()
+        app.handle_event("offers", [{"id": "1"}])
+        app.switch_view.assert_not_called()
+        self.assertEqual(app.offer_ids, ["1", None, None])
+
+    def test_build_response_requires_token_and_champion_and_does_not_change_tabs(self):
+        app = self.make_view()
+        app.render_builds = Mock()
+        app.view.get.return_value = "builds"
+        data = {"champion_id": "157", "groups": []}
+        app.handle_event("builds", (8, data))
+        app.handle_event("builds", (9, {"champion_id": "41", "groups": []}))
+        self.assertIsNone(app.build_data)
+        app.handle_event("builds", (9, data))
+        app.render_builds.assert_called_once()
+        app.switch_view.assert_not_called()
+        app.view.get.return_value = "augments"
+        app.render_builds.reset_mock()
+        app.handle_event("builds", (9, data))
+        app.render_builds.assert_not_called()
+        app.source.set.assert_not_called()
+
+    def test_champion_change_invalidates_builds_immediately_and_fetches_once(self):
+        app = self.make_view()
+        app.champion = "41"
+        app.lookup_builds()
+        app.lookup_builds()
+        self.assertEqual(app.requests.get_nowait(), ("builds", (10, "41")))
+        self.assertTrue(app.requests.empty())
+        app.handle_event("builds", (9, {"champion_id": "157", "groups": []}))
+        self.assertIsNone(app.build_data)
+        for card in app.build_cards:
+            card["frame"].pack_forget.assert_called_once()
+
+    def test_build_cards_default_to_games_and_keep_sets_low_samples_and_source_clear(self):
+        app = self.make_view()
+        app.view.get.return_value = "builds"
+        app.build_data = {"version": "16.21", "data_date": "2026-10-25", "stale": True, "groups": [
+            {"label": "AP", "rows": [
+                {"item_names": ["Rare One", "Rare Two", "Rare Three"], "win_rate": .99,
+                 "sample_count": 10, "pick_rate": .001},
+                {"item_names": ["Liandry's Torment", "Blackfire Torch", "Rylai's Crystal Scepter"],
+                 "win_rate": .52, "sample_count": 10000, "pick_rate": .6},
+                {"item_names": ["A", "B", "C"], "win_rate": None, "sample_count": 0, "pick_rate": None}]}]}
+        app.render_builds()
+        self.assertIn("Liandry", app.build_cards[0]["names"].configure.call_args.kwargs["text"])
+        app.build_cards[0]["value"].configure.assert_called_with(text="52.0%")
+        self.assertIn("60.0% of AP builds", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
+        self.assertIn("LOW SAMPLE", app.build_cards[1]["meta"].configure.call_args.kwargs["text"])
+        app.build_cards[2]["value"].configure.assert_called_with(text="—")
+        app.build_cards[3]["frame"].pack.assert_not_called()
+        self.assertIn("cached/offline", app.source.set.call_args.args[0])
+
+    def test_build_error_cannot_clear_a_newer_champions_data(self):
+        app = self.make_view()
+        app.build_data = {"champion_id": "157", "groups": []}
+        app.handle_event("builds_error", (8, "old failure"))
+        self.assertIsNotNone(app.build_data)
+        app.handle_event("builds_error", (9, "current failure"))
+        self.assertIsNone(app.build_data)
+        self.assertIn("unavailable", app.build_summary.set.call_args.args[0])
+
+    def test_build_view_keeps_scan_failure_visible_without_navigation(self):
+        app = self.make_view()
+        app.view.get.return_value = "builds"
+        app.handle_event("scan_status", "Scan paused · focus League to resume.")
+        self.assertIn("Scan paused", app.status.set.call_args.args[0])
+        app.switch_view.assert_not_called()
+
+    def test_entering_pending_build_page_clears_another_pages_source(self):
+        app = self.make_view()
+        app.view.get.return_value = "builds"
+        app.render_builds()
+        app.source.set.assert_called_with("ARAMKit · core-build data")
+
+    def test_temporary_poll_failure_keeps_manual_tab_but_match_end_rearms_builds(self):
+        app = self.make_view()
+        app.view_automatic = False
+        app.view.get.return_value = "spells"
+        app.handle_game({"status": "waiting"})
+        app.handle_game({"status": "live", "champion_name": "Yasuo"})
+        app.switch_view.assert_not_called()
+        app.handle_game({"status": "waiting", "phase": "EndOfGame"})
+        app.handle_game({"status": "live", "champion_name": "Yasuo"})
+        app.switch_view.assert_called_once_with("builds", automatic=True)
 
 
 if __name__ == "__main__":

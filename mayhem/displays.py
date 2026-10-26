@@ -93,20 +93,15 @@ def list_displays() -> list[dict]:
 
 
 def select_display(displays, preferred_device=None, prefer_portrait=False, position=None):
-    """Choose saved device, then preferred orientation/position, then primary.
+    """Choose within the preferred orientation, then saved device/position.
 
-    A missing saved device falls back to an available portrait display when
-    requested, otherwise to a display containing the saved position or primary.
+    A portrait preference overrides a saved device now assigned to landscape.
+    When no portrait is attached, keep the saved device/position/primary fallback.
     The returned value is one of the supplied display dictionaries, or None.
     """
     valid = [display for display in displays if _valid_display(display)]
     if not valid:
         return None
-    if isinstance(preferred_device, str):
-        preferred = next((display for display in valid
-                          if display["device"].casefold() == preferred_device.casefold()), None)
-        if preferred is not None:
-            return preferred
     candidates = valid
     if prefer_portrait:
         portrait = [display for display in valid
@@ -114,6 +109,11 @@ def select_display(displays, preferred_device=None, prefer_portrait=False, posit
                     display["bounds"][2] - display["bounds"][0]]
         if portrait:
             candidates = portrait
+    if isinstance(preferred_device, str):
+        preferred = next((display for display in candidates
+                          if display["device"].casefold() == preferred_device.casefold()), None)
+        if preferred is not None:
+            return preferred
     point = _point(position)
     positioned = next((display for display in candidates if _contains(display["bounds"], point)), None)
     if positioned is not None:

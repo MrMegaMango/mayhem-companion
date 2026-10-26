@@ -12,10 +12,10 @@ class SpellWorkerTests(unittest.TestCase):
         self.client.poll.return_value = {"status": "waiting"}
         self.addCleanup(patcher.stop)
 
-    def run_request(self, provider):
+    def run_request(self, provider, task="spells"):
         events, requests, stop = queue.Queue(), queue.Queue(), Mock()
         stop.wait.side_effect = [False, True]
-        requests.put(("spells", (9, "157")))
+        requests.put((task, (9, "157")))
         with patch("mayhem.worker.StatsProvider", return_value=provider), \
                 patch("mayhem.worker.poll_active_player", return_value={"status": "waiting"}):
             worker = Worker(events, requests, stop, ".")
@@ -35,6 +35,21 @@ class SpellWorkerTests(unittest.TestCase):
         result = self.run_request(provider)
         self.assertIn(("spells_error", (9, "Unavailable")), result)
         self.assertIn(("game", {"status": "waiting", "phase": None, "is_aram": None}), result)
+
+    def test_build_lookup_preserves_token_for_stale_result_detection(self):
+        provider = Mock()
+        data = {"champion_id": "157", "rows": [{"items": [3031, 3046], "win_rate": 54.2}]}
+        provider.item_builds_for.return_value = data
+        events = self.run_request(provider, "builds")
+        provider.item_builds_for.assert_called_once_with("157")
+        self.assertIn(("builds", (9, data)), events)
+
+    def test_build_failure_is_scoped_to_its_request(self):
+        provider = Mock()
+        provider.item_builds_for.side_effect = ValueError("Build data unavailable")
+        events = self.run_request(provider, "builds")
+        self.assertIn(("builds_error", (9, "Build data unavailable")), events)
+        self.assertIn(("game", {"status": "waiting", "phase": None, "is_aram": None}), events)
 
     def test_focus_loss_retains_last_offers_and_marks_scan_paused(self):
         events, requests, stop = queue.Queue(), queue.Queue(), Mock()
@@ -138,6 +153,121 @@ class SpellWorkerTests(unittest.TestCase):
             worker.run()
         capture.return_value.scan.assert_not_called()
         self.assertFalse(worker.last_game["is_aram"])
+
+
+class OfferExpiryTests(unittest.TestCase):
+    @staticmethod
+    def ok(offers=()):
+        return {"status": "ok", "lines": [{"id": ident} for ident in offers]}
+
+    def run_scans(self, captures, times, *, rescan=False, initial_offers=("1", "2", "3")):
+        self.assertEqual(len(captures), len(times))
+        events, requests, stop = queue.Queue(), queue.Queue(), Mock()
+        if rescan:
+            requests.put(("scan", None))
+        stop.wait.side_effect = [False] * len(times) + [True]
+        provider = Mock()
+        provider.load_catalog.return_value = {"augments": {}}
+        with patch("mayhem.worker.StatsProvider", return_value=provider), \
+                patch("mayhem.worker.ClientReader"), \
+                patch("mayhem.worker.CaptureReader") as capture, \
+                patch("mayhem.worker.detect_offers", side_effect=lambda lines, catalog: lines), \
+                patch("mayhem.worker.time.monotonic", side_effect=times), \
+                patch("mayhem.worker.logging.exception"):
+            capture.return_value.scan.side_effect = captures
+            worker = Worker(events, requests, stop, ".")
+            worker.next_poll = float("inf")
+            worker.last_game = {"status": "live", "is_aram": True}
+            worker.last_offers = initial_offers
+            worker.last_seen = 0
+            worker.run()
+            self.assertEqual(capture.return_value.scan.call_count, len(captures))
+        return worker, list(events.queue)
+
+    def test_empty_scans_clear_once_after_debounce_and_return_to_idle_cadence(self):
+        worker, events = self.run_scans([self.ok()] * 5, [10, 10.4, 10.8, 11.21, 12.1])
+        self.assertEqual(worker.last_offers, ())
+        self.assertEqual(events.count(("offers", [])), 1)
+        self.assertAlmostEqual(worker.next_scan, 12.1 + Worker.IDLE_SCAN_SECONDS)
+
+    def test_successful_empty_scans_before_threshold_keep_choices_and_fast_cadence(self):
+        worker, events = self.run_scans([self.ok()] * 3, [10, 10.4, 10.8])
+        self.assertEqual(worker.last_offers, ("1", "2", "3"))
+        self.assertNotIn(("offers", []), events)
+        self.assertAlmostEqual(worker.next_scan, 10.8 + Worker.ACTIVE_SCAN_SECONDS)
+
+    def test_one_empty_frame_never_clears_even_long_after_last_recognition(self):
+        worker, events = self.run_scans([self.ok()], [100])
+        self.assertEqual(worker.empty_frames, 1)
+        self.assertEqual(worker.last_offers, ("1", "2", "3"))
+        self.assertNotIn(("offers", []), events)
+
+    def test_titles_during_reroll_restart_absence_debounce(self):
+        captures = [self.ok(), self.ok(), self.ok(("1", "2", "3")), self.ok(), self.ok()]
+        worker, events = self.run_scans(captures, [10, 10.4, 10.8, 11.2, 11.6])
+        self.assertEqual(worker.last_offers, ("1", "2", "3"))
+        self.assertEqual(worker.empty_frames, 2)
+        self.assertEqual(worker.empty_since, 11.2)
+        self.assertNotIn(("offers", []), events)
+
+    def test_pause_unreadable_and_capture_error_reset_absence_without_clearing(self):
+        for status in ("waiting", "unreadable", "error"):
+            with self.subTest(status=status):
+                captures = [self.ok(), self.ok(), {"status": status}, self.ok(), self.ok()]
+                worker, events = self.run_scans(captures, [10, 10.4, 10.8, 21, 21.4])
+                self.assertEqual(worker.last_offers, ("1", "2", "3"))
+                self.assertEqual(worker.empty_since, 21)
+                self.assertNotIn(("offers", []), events)
+
+    def test_ocr_exception_resets_absence_and_preserves_choices(self):
+        captures = [self.ok(), self.ok(), OSError("Capture unavailable"), self.ok(), self.ok()]
+        worker, events = self.run_scans(captures, [10, 10.4, 10.8, 21, 21.4])
+        self.assertEqual(worker.last_offers, ("1", "2", "3"))
+        self.assertEqual(worker.empty_since, 21)
+        self.assertNotIn(("offers", []), events)
+
+    def test_rerolled_titles_still_require_two_reads_without_empty_handoff(self):
+        captures = [self.ok(), self.ok(("4", "5", "6")), self.ok(("4", "5", "6"))]
+        worker, events = self.run_scans(captures, [10, 10.4, 10.8])
+        self.assertEqual(worker.last_offers, ("4", "5", "6"))
+        self.assertIn(("offers", [{"id": "4"}, {"id": "5"}, {"id": "6"}]), events)
+        self.assertNotIn(("offers", []), events)
+
+    def test_rescan_preserves_visible_choices_until_same_ids_are_confirmed(self):
+        offers = ("1", "2", "3")
+        worker, events = self.run_scans([self.ok(offers)], [10], rescan=True)
+        self.assertEqual(worker.last_offers, offers)
+        self.assertTrue(worker.force_offer_emit)
+        self.assertFalse(any(kind == "offers" for kind, _ in events))
+        worker, events = self.run_scans([self.ok(offers)] * 3, [10, 10.4, 10.8], rescan=True)
+        self.assertEqual([value for kind, value in events if kind == "offers"],
+                         [[{"id": "1"}, {"id": "2"}, {"id": "3"}]])
+        self.assertFalse(worker.force_offer_emit)
+
+    def test_rescan_only_hands_off_to_empty_after_confirmed_disappearance(self):
+        worker, events = self.run_scans([self.ok()] * 3, [10, 10.4, 10.8], rescan=True)
+        self.assertEqual(worker.last_offers, ("1", "2", "3"))
+        self.assertNotIn(("offers", []), events)
+        worker, events = self.run_scans([self.ok()] * 5, [10, 10.4, 10.8, 11.21, 12.1], rescan=True)
+        self.assertEqual(events.count(("offers", [])), 1)
+        self.assertEqual(worker.last_offers, ())
+        self.assertFalse(worker.force_offer_emit)
+
+    def test_rescan_after_manual_browsing_can_confirm_absence_without_prior_auto_choices(self):
+        worker, events = self.run_scans([self.ok()] * 4, [10, 10.4, 10.8, 11.21],
+                                       rescan=True, initial_offers=())
+        self.assertEqual(events.count(("offers", [])), 1)
+        self.assertFalse(worker.force_offer_emit)
+
+    def test_rescan_focus_pause_and_failures_do_not_create_empty_handoff(self):
+        for status in ("waiting", "unreadable", "error"):
+            with self.subTest(status=status):
+                captures = [{"status": status}, self.ok(("1", "2", "3")), self.ok(("1", "2", "3"))]
+                worker, events = self.run_scans(captures, [10, 21, 21.4], rescan=True)
+                self.assertNotIn(("offers", []), events)
+                self.assertEqual([value for kind, value in events if kind == "offers"],
+                                 [[{"id": "1"}, {"id": "2"}, {"id": "3"}]])
+                self.assertFalse(worker.force_offer_emit)
 
 
 if __name__ == "__main__":

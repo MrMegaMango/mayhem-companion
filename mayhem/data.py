@@ -218,6 +218,120 @@ def _named_summoner_pairs(rows: list[dict], resources: dict) -> list[dict]:
     return named
 
 
+def _build_stats(row: object) -> dict:
+    if not isinstance(row, dict):
+        raise DataUnavailableError("Invalid ARAMKit item build row")
+    count = _count(row.get("sampleCount"))
+    win_rate = _rate(row.get("winRate"), optional=True)
+    rank = row.get("rank")
+    if rank is not None and (isinstance(rank, bool) or not isinstance(rank, int) or rank < 1):
+        raise DataUnavailableError("Invalid ARAMKit item build rank")
+    return {
+        "rank": rank,
+        "sample_count": count,
+        "win_rate": win_rate if count else None,
+        "pick_rate": _rate(row.get("pickRate"), optional=True),
+        "low_sample": count < 200,
+    }
+
+
+def _core_item_ids(items: object) -> list[str]:
+    if not isinstance(items, list) or len(items) != 3:
+        raise DataUnavailableError("ARAMKit core builds must contain three items")
+    try:
+        ids = [_identifier(item.get("id")) for item in items if isinstance(item, dict)]
+    except ValueError as error:
+        raise DataUnavailableError("Invalid ARAMKit item ID") from error
+    if len(ids) != 3:
+        raise DataUnavailableError("Invalid ARAMKit core build items")
+    return ids
+
+
+def _item_build_groups(detail: dict) -> list[dict]:
+    """Keep core-set rates separate from their ordered purchase-route rates."""
+    builds = detail.get("builds", {})
+    if not isinstance(builds, dict):
+        raise DataUnavailableError("Invalid ARAMKit item builds")
+    filtered = builds.get("filtered", {})
+    if not isinstance(filtered, dict):
+        raise DataUnavailableError("Invalid ARAMKit filtered item builds")
+    archetypes = filtered.get("archetypes", [])
+    if not isinstance(archetypes, list):
+        raise DataUnavailableError("Invalid ARAMKit build groups")
+    groups, seen_groups = [], set()
+    for archetype in archetypes:
+        stats = _build_stats(archetype)
+        key = archetype.get("key")
+        if not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key):
+            raise DataUnavailableError("Invalid ARAMKit build group key")
+        if key in seen_groups:
+            raise DataUnavailableError("Duplicate ARAMKit build group")
+        seen_groups.add(key)
+        profiles = archetype.get("profiles", [])
+        if not isinstance(profiles, list):
+            raise DataUnavailableError("Invalid ARAMKit core build profiles")
+        rows, seen_sets = [], set()
+        for profile in profiles:
+            profile_stats = _build_stats(profile)
+            ids = _core_item_ids(profile.get("itemSet"))
+            item_set = tuple(sorted(ids))
+            if item_set in seen_sets:
+                raise DataUnavailableError("Duplicate ARAMKit core build")
+            seen_sets.add(item_set)
+            source_routes = profile.get("routes", [])
+            if not isinstance(source_routes, list):
+                raise DataUnavailableError("Invalid ARAMKit purchase routes")
+            routes, seen_routes = [], set()
+            for route in source_routes:
+                route_stats = _build_stats(route)
+                route_ids = _core_item_ids(route.get("purchaseOrder"))
+                if tuple(sorted(route_ids)) != item_set:
+                    raise DataUnavailableError("ARAMKit purchase route differs from its core build")
+                if tuple(route_ids) in seen_routes:
+                    raise DataUnavailableError("Duplicate ARAMKit purchase route")
+                seen_routes.add(tuple(route_ids))
+                routes.append({
+                    **route_stats, "item_ids": route_ids, "ordered": True,
+                    "pick_rate_scope": "core_set",
+                })
+            rows.append({
+                **profile_stats, "item_ids": ids, "ordered": False,
+                "pick_rate_scope": "build_group", "routes": routes,
+            })
+        groups.append({
+            **stats, "key": key,
+            "label": key.upper() if key in ("ap", "ad") else key.replace("_", " ").title(),
+            "rows": rows,
+        })
+    return groups
+
+
+def _item_resource(data: object) -> dict:
+    # ARAMKit includes the synthetic "0: No Boots" resource. Core IDs remain positive.
+    if not isinstance(data, dict) or not data:
+        raise DataUnavailableError("Invalid ARAMKit item resource catalog")
+    for key, row in data.items():
+        try:
+            if key != "0":
+                _identifier(key)
+        except ValueError as error:
+            raise DataUnavailableError("Invalid ARAMKit item resource ID") from error
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str) or not row["name"].strip():
+            raise DataUnavailableError("ARAMKit item names are missing")
+    return data
+
+
+def _named_item_builds(groups: list[dict], resources: dict) -> list[dict]:
+    groups = copy.deepcopy(groups)
+    for group in groups:
+        for profile in group["rows"]:
+            for row in [profile, *profile["routes"]]:
+                if any(item_id not in resources for item_id in row["item_ids"]):
+                    raise DataUnavailableError("ARAMKit item names do not match the statistics")
+                row["item_names"] = [resources[item_id]["name"] for item_id in row["item_ids"]]
+    return groups
+
+
 class StatsProvider:
     """Public ARAMKit data with daily discovery and immutable snapshot caching.
 
@@ -236,6 +350,7 @@ class StatsProvider:
         self._detail_meta: dict[tuple[str, str], dict] = {}
         self._details: dict[tuple[str, str], dict] = {}
         self._summoner_fallbacks: dict[tuple[str, str], dict] = {}
+        self._item_fallbacks: dict[tuple[str, str], dict] = {}
 
     def _cache_path(self, url: str) -> Path:
         return self.cache_dir / (hashlib.sha256(url.encode()).hexdigest() + ".json")
@@ -525,6 +640,86 @@ class StatsProvider:
         }
         if used_version != version:
             self._summoner_fallbacks[key] = {
+                "requested_url": requested_url, "retry_at": time.time() + RETRY_DELAY,
+                "result": copy.deepcopy(result),
+            }
+        return result
+
+    def _last_item_builds(self, champion_id: str, bracket: str) -> tuple[list[dict], dict] | None:
+        version = self._read_json(self.cache_dir / f"last-items-{champion_id}-{bracket}.json")
+        try:
+            _version_row(version)
+        except DataUnavailableError:
+            return None
+        cached = self._cached(
+            self._detail_url(version, champion_id, bracket),
+            lambda data: _detail(data, champion_id),
+        )
+        if cached is None:
+            return None
+        try:
+            groups = _item_build_groups(cached["data"])
+            if not any(group["rows"] for group in groups):
+                return groups, version
+            resources = self._cached(self._resource_url(version, "items"), _item_resource)
+            if resources is None:
+                return None
+            return _named_item_builds(groups, resources["data"]), version
+        except DataUnavailableError:
+            return None
+
+    def item_builds_for(self, champion_id: object, bracket: str = "all") -> dict:
+        """Return champion-specific core sets grouped by build type.
+
+        Core rows are unordered three-item sets; nested routes retain actual
+        purchase order and their own observations. Their pick rates refer to
+        the build group and core set respectively. Only ARAMKit's filtered
+        builds are used, with matching item names from the same snapshot.
+        Missing observations produce empty groups; malformed/unavailable data
+        raises. Transport fallback keeps an entire older snapshot and its date.
+        """
+        champion_id = _identifier(champion_id)
+        detail = self.champion_detail(champion_id, bracket)
+        key = (champion_id, bracket)
+        version = self._details[key]["version"]
+        requested_url = self._detail_url(version, champion_id, bracket)
+        fallback = self._item_fallbacks.get(key)
+        if (
+            fallback is not None and fallback["requested_url"] == requested_url
+            and time.time() < fallback["retry_at"]
+        ):
+            return copy.deepcopy(fallback["result"])
+
+        groups = _item_build_groups(detail)
+        stale = self._detail_meta[key]["stale"]
+        used_version = version
+        try:
+            if any(group["rows"] for group in groups):
+                resources, resource_stale = self._fetch(
+                    self._resource_url(version, "items"), _item_resource,
+                )
+                groups = _named_item_builds(groups, resources)
+                stale = stale or resource_stale
+            self._write_json(self.cache_dir / f"last-items-{champion_id}-{bracket}.json", version)
+            self._item_fallbacks.pop(key, None)
+        except DataUnavailableError as error:
+            previous = self._last_item_builds(champion_id, bracket) if error.transient else None
+            if previous is None:
+                raise
+            groups, used_version = previous
+            stale = True
+
+        result = {
+            **self._metadata(used_version, stale),
+            "source_url": self.source_url(champion_id),
+            "champion_id": champion_id,
+            "scope": "champion",
+            "bracket": bracket,
+            "build_filter": "filtered",
+            "groups": groups,
+        }
+        if used_version != version:
+            self._item_fallbacks[key] = {
                 "requested_url": requested_url, "retry_at": time.time() + RETRY_DELAY,
                 "result": copy.deepcopy(result),
             }

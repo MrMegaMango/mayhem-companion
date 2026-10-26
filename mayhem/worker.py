@@ -14,6 +14,8 @@ from .matching import detect_offers
 class Worker(threading.Thread):
     ACTIVE_SCAN_SECONDS = 0.35
     IDLE_SCAN_SECONDS = 0.8
+    OFFER_GONE_SECONDS = 1.2
+    OFFER_GONE_MIN_FRAMES = 2
 
     def __init__(self, output, requests, stop, cache):
         super().__init__(daemon=True, name="mayhem-reader")
@@ -27,6 +29,9 @@ class Worker(threading.Thread):
         self.next_poll = self.next_scan = 0.0
         self.last_offers = self.pending_offers = ()
         self.last_seen = 0.0
+        self.empty_since = None
+        self.empty_frames = 0
+        self.force_offer_emit = False
 
     def emit(self, kind, value):
         self.output.put((kind, value))
@@ -71,8 +76,11 @@ class Worker(threading.Thread):
                         self.load()
                     elif task == "scan":
                         self.next_scan = 0
-                        self.last_offers = self.pending_offers = ()
-                        self.emit("offers", [])
+                        self.pending_offers = ()
+                        self.empty_since, self.empty_frames = None, 0
+                        # Refresh the UI after confirmation, even if these are
+                        # the same IDs it had before manual browsing/rescan.
+                        self.force_offer_emit = True
                     elif task == "lookup":
                         token, champion, ids, stage = payload
                         try:
@@ -87,6 +95,12 @@ class Worker(threading.Thread):
                             self.emit("spells", (token, self.provider.summoner_spells_for(champion)))
                         except Exception as exc:
                             self.emit("spells_error", (token, str(exc)))
+                    elif task == "builds":
+                        token, champion = payload
+                        try:
+                            self.emit("builds", (token, self.provider.item_builds_for(champion)))
+                        except Exception as exc:
+                            self.emit("builds_error", (token, str(exc)))
             except queue.Empty:
                 pass
             except Exception as exc:
@@ -106,6 +120,7 @@ class Worker(threading.Thread):
             if not (self.enabled and self.catalog and self.last_game
                     and self.last_game.get("status") == "live"
                     and self.last_game.get("is_aram") is True):
+                self.empty_since, self.empty_frames = None, 0
                 if self.last_offers:
                     self.last_offers = self.pending_offers = ()
                     self.emit("offers", [])
@@ -117,6 +132,7 @@ class Worker(threading.Thread):
                 result = self.capture.scan()
                 if result.get("status") != "ok":
                     self.pending_offers = ()
+                    self.empty_since, self.empty_frames = None, 0
                     self.next_scan = now + self.IDLE_SCAN_SECONDS
                     if result.get("status") == "waiting":
                         message = "Scan paused · focus League to resume."
@@ -137,18 +153,33 @@ class Worker(threading.Thread):
                 signature = tuple(str(x["id"]) for x in offers)
                 if signature:
                     self.last_seen = now
+                    self.empty_since, self.empty_frames = None, 0
                     # Wait for two readings: animations/rerolls can show partial titles.
-                    if signature == self.pending_offers and signature != self.last_offers:
+                    if (signature == self.pending_offers
+                            and (signature != self.last_offers or self.force_offer_emit)):
                         self.last_offers = signature
+                        self.force_offer_emit = False
                         self.emit("offers", offers)
                     self.pending_offers = signature
                 else:
-                    self.next_scan = now + self.IDLE_SCAN_SECONDS
                     self.pending_offers = ()
-                    if self.last_offers and now - self.last_seen > 4:
+                    # Only a continuous run of successful empty scans proves
+                    # the cards disappeared. Pauses/failures cannot age out a
+                    # choice, and one empty reroll frame cannot clear it.
+                    if self.empty_since is None:
+                        self.empty_since = now
+                    self.empty_frames += 1
+                    if ((self.last_offers or self.force_offer_emit)
+                            and self.empty_frames >= self.OFFER_GONE_MIN_FRAMES
+                            and now - self.empty_since >= self.OFFER_GONE_SECONDS):
                         self.last_offers = ()
+                        self.force_offer_emit = False
                         self.emit("offers", [])
+                    self.next_scan = now + (self.ACTIVE_SCAN_SECONDS if self.last_offers or self.force_offer_emit
+                                            else self.IDLE_SCAN_SECONDS)
             except Exception as exc:
+                self.pending_offers = ()
+                self.empty_since, self.empty_frames = None, 0
                 logging.exception("OCR failed")
                 self.emit("scan_status", f"OCR unavailable: {exc}. Manual search still works.")
                 self.next_scan = now + 10

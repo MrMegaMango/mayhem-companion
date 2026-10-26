@@ -63,9 +63,12 @@ class Companion:
         self.auto_visible = self.browse_mode = False
         self.visibility_override = None
         self.game_status = "waiting"
+        self.last_active_status = None
         self.champ_select = self.champion_preview = False
         self.token = 0
         self.is_auto_offer = False
+        self.offers_active = False
+        self.view_automatic = True
         self.offer_ids = [None, None, None]
         self.cards = []
         self.augment_names, self.champion_names = [], []
@@ -74,6 +77,10 @@ class Companion:
         self.spell_token = 0
         self.spell_champion = None
         self.spell_data = None
+        self.build_token = 0
+        self.build_champion = None
+        self.build_data = None
+        self.build_cards = []
         self.live_spells = []
         self.build()
         self.hotkeys = Hotkeys(root, {101: (ord("M"), self.toggle_visible),
@@ -138,6 +145,8 @@ class Companion:
         self.view = tk.StringVar(value="augments")
         self.augment_tab = self.button(tabs, "Augments", lambda: self.switch_view("augments"), FIELD)
         self.augment_tab.pack(side="left", fill="x", expand=True)
+        self.builds_tab = self.button(tabs, "Builds", lambda: self.switch_view("builds"), BG)
+        self.builds_tab.pack(side="left", fill="x", expand=True)
         self.spells_tab = self.button(tabs, "Spells", lambda: self.switch_view("spells"), BG)
         self.spells_tab.pack(side="left", fill="x", expand=True)
         self.pages = tk.Frame(self.body, bg=BG)
@@ -189,6 +198,7 @@ class Companion:
             metadata.pack(side="right", fill="x", expand=True)
             self.cards.append({"var": name, "box": box, "value": value, "meta": metadata})
         self.build_spells(style)
+        self.build_items()
         self.status = tk.StringVar(value="Loading augment data…")
         self.label(self.body, size=9, color=MUTED, textvariable=self.status,
                    wraplength=398, anchor="w", justify="left").pack(fill="x", pady=(2, 6))
@@ -225,6 +235,7 @@ class Companion:
 
     def filter_augments(self, event, index):
         if event.keysym not in ("Return", "Up", "Down", "Escape"):
+            self.view_automatic = False
             query = self.cards[index]["var"].get().casefold()
             self.cards[index]["box"]["values"] = [n for n in self.augment_names if query in n.casefold()]
             self.offer_ids[index] = None
@@ -247,6 +258,7 @@ class Companion:
 
     def auto_champion(self):
         self.follow = True
+        self.offers_active = False
         self.champion = self.live_champion
         self.clear_offers()
         self.requests.put(("scan", None))
@@ -256,10 +268,13 @@ class Companion:
         self.badge.configure(text="CHAMP SELECT" if self.champ_select else "LIVE" if self.game_live else "WAITING",
                              fg=ACCENT if active else MUTED)
         if self.champ_select:
-            self.switch_view("spells")
+            self.switch_view("spells", automatic=True)
+        elif self.game_live:
+            self.switch_view("builds", automatic=True)
         self.lookup()
 
     def select_augment(self, index):
+        self.view_automatic = False
         value = self.cards[index]["var"].get().strip().casefold()
         ident = self.augment_by_name.get(value)
         self.offer_ids[index] = ident
@@ -270,6 +285,7 @@ class Companion:
 
     def lookup(self):
         self.lookup_spells()
+        self.lookup_builds()
         self.token += 1
         for ident, card in zip(self.offer_ids, self.cards):
             card["value"].configure(text="—", fg=TEXT)
@@ -316,19 +332,120 @@ class Companion:
         self.label(self.spell_panel, size=8, color=MUTED, textvariable=self.spell_note,
                    anchor="w").pack(fill="x", pady=(7, 0))
 
-    def switch_view(self, view):
+    def build_items(self):
+        self.build_panel = tk.Frame(self.pages, bg=BG)
+        toolbar = tk.Frame(self.build_panel, bg=BG)
+        toolbar.pack(fill="x", pady=(0, 8))
+        self.build_group = tk.StringVar(value="")
+        self.build_group_box = ttk.Combobox(toolbar, textvariable=self.build_group,
+                                            state="readonly", width=17)
+        self.build_group_box.pack(side="left")
+        self.build_group_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
+        self.build_sort = tk.StringVar(value="Games")
+        sort_box = ttk.Combobox(toolbar, textvariable=self.build_sort, state="readonly", width=10,
+                               values=["Games", "Win rate", "Pick rate"])
+        sort_box.pack(side="right")
+        sort_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
+        self.build_summary = tk.StringVar(value="Choose a champion to see core builds.")
+        self.label(self.build_panel, size=9, color=MUTED, textvariable=self.build_summary,
+                   wraplength=398, anchor="w", justify="left").pack(fill="x", pady=(0, 8))
+        for _ in range(5):
+            frame = tk.Frame(self.build_panel, bg=PANEL, padx=12, pady=9)
+            top = tk.Frame(frame, bg=PANEL)
+            top.pack(fill="x")
+            rate = tk.Frame(top, bg=PANEL)
+            rate.pack(side="right", anchor="n", padx=(8, 0))
+            value = self.label(rate, "—", 21, TEXT, True)
+            value.pack(anchor="e")
+            self.label(rate, "WIN RATE", 7, MUTED).pack(anchor="e")
+            names = self.label(top, size=10, color=TEXT, wraplength=270, anchor="w", justify="left")
+            names.pack(side="left", fill="x", expand=True)
+            meta = self.label(frame, size=8, color=MUTED, wraplength=374, anchor="w", justify="left")
+            meta.pack(fill="x", pady=(5, 0))
+            self.build_cards.append({"frame": frame, "names": names, "value": value, "meta": meta})
+        self.build_note = tk.StringVar(value="")
+        self.build_note_label = self.label(self.build_panel, size=8, color=MUTED,
+                                          textvariable=self.build_note, wraplength=398, anchor="w", justify="left")
+        self.build_note_label.pack(fill="x", side="bottom", pady=(7, 0))
+
+    def switch_view(self, view, *, automatic=False):
+        self.view_automatic = automatic
         self.view.set(view)
         self.augment_panel.pack_forget()
         self.spell_panel.pack_forget()
-        (self.spell_panel if view == "spells" else self.augment_panel).pack(fill="both", expand=True)
+        self.build_panel.pack_forget()
+        {"augments": self.augment_panel, "spells": self.spell_panel,
+         "builds": self.build_panel}[view].pack(fill="both", expand=True)
         self.augment_tab.configure(bg=FIELD if view == "augments" else BG)
         self.spells_tab.configure(bg=FIELD if view == "spells" else BG)
+        self.builds_tab.configure(bg=FIELD if view == "builds" else BG)
         if view == "spells":
             self.lookup_spells()
             self.render_spells()
+        elif view == "builds":
+            self.lookup_builds()
+            self.render_builds()
         else:
             self.lookup()
         self.root.after_idle(self.fit_window)
+
+    def lookup_builds(self, force=False):
+        if not force and self.build_champion == self.champion:
+            return
+        self.build_token += 1
+        self.build_champion = self.champion
+        self.build_data = None
+        self.build_group.set("")
+        self.build_group_box["values"] = []
+        for card in self.build_cards:
+            card["frame"].pack_forget()
+        self.build_note.set("")
+        self.build_summary.set("Loading core builds…" if self.champion else "Choose a champion to see core builds.")
+        if self.view.get() == "builds":
+            self.source.set("ARAMKit · core-build data")
+            self.root.after_idle(self.fit_window)
+        if self.champion:
+            self.requests.put(("builds", (self.build_token, self.champion)))
+
+    def render_builds(self):
+        for card in self.build_cards:
+            card["frame"].pack_forget()
+        if self.view.get() == "builds":
+            self.status.set("Watching for augment choices…" if self.follow and self.game_live and self.auto.get()
+                            else "Browsing core builds for the selected champion")
+        if self.build_data is None:
+            if self.view.get() == "builds":
+                self.source.set("ARAMKit · core-build data")
+            return
+        groups = [group for group in self.build_data["groups"] if group["rows"]]
+        self.build_group_box["values"] = [group["label"] for group in groups]
+        if not groups:
+            self.build_summary.set("No core-build data for this champion.")
+            self.build_note.set("")
+        else:
+            group = next((group for group in groups if group["label"] == self.build_group.get()), groups[0])
+            self.build_group.set(group["label"])
+            sort_key = {"Win rate": "win_rate", "Games": "sample_count", "Pick rate": "pick_rate"}[self.build_sort.get()]
+            rows = sorted(group["rows"], key=lambda row: (
+                row.get(sort_key) if row.get(sort_key) is not None else -1, row["sample_count"]), reverse=True)
+            self.build_summary.set(f"Core builds · {min(len(rows), len(self.build_cards))} of {len(rows)} sets")
+            for card, row in zip(self.build_cards, rows):
+                count, rate, pick = row["sample_count"], row["win_rate"], row.get("pick_rate")
+                low = count < 200
+                card["names"].configure(text="\n+ ".join(row["item_names"]))
+                card["value"].configure(text=f"{rate * 100:.1f}%" if rate is not None and count else "—")
+                parts = [f"{compact_count(count)} games"]
+                if pick is not None:
+                    parts.append(f"{pick * 100:.1f}% of {group['label']} builds")
+                if low:
+                    parts.append("LOW SAMPLE")
+                card["meta"].configure(text=" · ".join(parts), fg=AMBER if low else MUTED)
+                card["frame"].pack(fill="x", pady=(0, 7), before=self.build_note_label)
+            self.build_note.set("Core item sets · filtered sample · not purchase order."
+                                + (" Cached data." if self.build_data.get("stale") else ""))
+        if self.view.get() == "builds":
+            self.update_source(self.build_data)
+            self.root.after_idle(self.fit_window)
 
     def panel_placement(self, height, position=None):
         try:
@@ -578,21 +695,31 @@ class Companion:
             self.source.set(f"ARAMKit · {payload.get('version', '')} · {payload.get('data_date', '')}{marker}")
             self.status.set("Waiting for champion select. You can also browse a champion.")
             self.lookup_spells(force=True)
+            self.lookup_builds(force=True)
         elif kind == "game":
             self.handle_game(payload)
         elif kind == "offers":
+            previously_active = self.offers_active
             if not payload:
+                self.offers_active = False
                 if self.is_auto_offer:
                     self.clear_offers()
                     self.status.set("Waiting for augment choices…")
+                if (previously_active and self.follow and self.game_live
+                        and self.view.get() == "augments" and self.view_automatic):
+                    self.switch_view("builds", automatic=True)
             elif self.auto.get():
+                self.offers_active = True
                 self.offer_ids = [str(x["id"]) for x in payload[:3]]
                 self.offer_ids += [None] * (3 - len(self.offer_ids))
                 for ident, card in zip(self.offer_ids, self.cards):
                     card["var"].set(self.catalog["augments"][ident]["name"] if ident else "")
                 self.is_auto_offer = True
                 self.status.set(f"{len(payload)} titles recognized · shown left to right")
-                self.lookup()
+                if not previously_active and self.follow and self.game_live:
+                    self.switch_view("augments", automatic=True)
+                else:
+                    self.lookup()
         elif kind == "rates":
             token, rates = payload
             if token == self.token:
@@ -609,6 +736,22 @@ class Companion:
                 self.spell_data = None
                 self.spell_summary.set("Spell data unavailable. Use Retry data.")
                 self.spell_note.set(str(error)[:80])
+        elif kind == "builds":
+            token, data = payload
+            if token == self.build_token and str(data.get("champion_id")) == self.champion:
+                self.build_data = data
+                if self.view.get() == "builds":
+                    self.render_builds()
+        elif kind == "builds_error":
+            token, error = payload
+            if token == self.build_token:
+                self.build_data = None
+                for card in self.build_cards:
+                    card["frame"].pack_forget()
+                self.build_summary.set("Build data unavailable. Use Retry data.")
+                self.build_note.set(str(error)[:120])
+                if self.view.get() == "builds":
+                    self.root.after_idle(self.fit_window)
         elif kind == "lookup_error":
             token, error = payload
             if token == self.token:
@@ -617,8 +760,11 @@ class Companion:
                     card["meta"].configure(text="Data unavailable", fg=AMBER)
                 self.status.set(error[:180])
         elif kind == "scan_status":
-            if self.view.get() == "augments" and self.auto.get():
+            if self.view.get() in ("augments", "builds") and self.auto.get():
                 message = payload or "Watching for augment choices…"
+                if self.view.get() == "builds" and (message.startswith("No augment choices")
+                                                       or "titles recognized" in message):
+                    message = "Watching for augment choices…"
                 if self.locked:
                     message += " · Ctrl+Alt+L to unlock"
                 self.status.set(message)
@@ -633,6 +779,11 @@ class Companion:
         self.champ_select = game.get("status") == "champ_select"
         self.champion_preview = bool(game.get("champion_preview"))
         active = self.game_live or self.champ_select
+        previous_active_status = self.last_active_status
+        if active:
+            self.last_active_status = self.game_status
+        elif game.get("phase") is not None and game["phase"] not in ("GameStart", "InProgress", "Reconnect"):
+            self.last_active_status = None
         previous_spells = self.live_spells
         self.live_spells = game.get("summoner_spells", []) if active else []
         ident = None
@@ -647,17 +798,18 @@ class Companion:
         if self.follow:
             if changed or phase_changed or self.champion != ident:
                 self.champion = ident
+                self.offers_active = False
                 self.clear_offers()
                 self.champ_var.set(self.catalog["champions"][ident]["name"] if ident else "Auto detect champion")
                 # Levels do not reliably identify pending picks or extra-augment mechanics.
                 self.stage.set("All picks")
             self.badge.configure(text="CHAMP SELECT" if self.champ_select else "LIVE" if ident else "WAITING",
                                  fg=ACCENT if active else MUTED)
-            if phase_changed:
+            if active and self.game_status != previous_active_status:
                 if self.champ_select:
-                    self.switch_view("spells")
+                    self.switch_view("spells", automatic=True)
                 elif self.game_live:
-                    self.switch_view("augments")
+                    self.switch_view("builds", automatic=True)
             if not active and not self.locked:
                 self.status.set("Waiting for champion select. Choose a champion to browse now.")
         if (changed or phase_changed or previous_spells != self.live_spells) and self.view.get() == "spells":
@@ -710,8 +862,13 @@ class Companion:
             "Manual lookup: type a champion or augment, choose from the dropdown, then press Enter. "
             "Auto follows your champion in champion select and in game. Pick filters are manual; All picks is the default.\n\n"
             "Spells shows champion-specific spell-pair rates, game counts and pick rates. "
-            "Spells opens during champion select, with your current pair highlighted. Augments opens when the game starts. "
+            "Spells opens during champion select, with your current pair highlighted. "
             "These are pair statistics, not individual-spell rates.\n\n"
+            "Builds opens during play between augment choices. It shows the most-played core item sets "
+            "for your champion, with win rates, pick rates and game counts. Switch build type or sorting above the sets. "
+            "The filtered core item sets are not a purchase order. "
+            "Detected choices open Augments, then Builds returns after they disappear. "
+            "Manual tab changes stay until the next selection or game phase.\n\n"
             "Rates come from ARAMKit's third-party sample, not all servers. Low samples are marked; "
             "missing champion data stays blank. Screenshots stay in memory on this computer.\n\n"
             "Riot's developer policy prohibits augment win-rate displays in apps and overlays. "

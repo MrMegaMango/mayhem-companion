@@ -26,6 +26,11 @@ AUGMENTS = {"3078": {"name": "The Boom and the Bass", "slug": "the-boom-and-the-
 SUMMONER_SPELLS = {
     "4": {"name": "Flash"}, "32": {"name": "Mark"}, "6": {"name": "Ghost"},
 }
+ITEMS = {
+    "0": {"name": "No Boots"}, "3031": {"name": "Infinity Edge"},
+    "3087": {"name": "Statikk Shiv"}, "6673": {"name": "Immortal Shieldbow"},
+    "3153": {"name": "Blade of the Ruined King"},
+}
 DETAIL = {
     "champion": {"id": 157, "stats": {"sampleCount": 1000, "winRate": 0.58}},
     "augments": {
@@ -39,6 +44,35 @@ SUMMONER_DETAIL = {
         {"rank": 1, "spells": [{"id": 4}, {"id": 32}], "sampleCount": 900, "winRate": 0.5864, "pickRate": 0.93},
         {"rank": 2, "spells": [{"id": 4}, {"id": 6}], "sampleCount": 90, "winRate": 0.567, "pickRate": 0.0576},
     ],
+}
+
+
+ITEM_DETAIL = {
+    **DETAIL,
+    "builds": {
+        "filtered": {
+            "sampleCount": 1000, "pickRate": 0.9,
+            "archetypes": [{
+                "key": "crit", "rank": 1, "sampleCount": 800, "winRate": 0.60, "pickRate": 0.8,
+                "profiles": [{
+                    "rank": 2, "itemSet": [{"id": 3087}, {"id": 3031}, {"id": 6673}],
+                    "sampleCount": 600, "winRate": 0.62, "pickRate": 0.75,
+                    "routes": [{
+                        "rank": 1, "purchaseOrder": [{"id": 3031}, {"id": 3087}, {"id": 6673}],
+                        "sampleCount": 50, "winRate": 0.52, "pickRate": 0.0833,
+                    }, {
+                        "rank": 2, "purchaseOrder": [{"id": 3087}, {"id": 3031}, {"id": 6673}],
+                        "sampleCount": 550, "winRate": 0.6291, "pickRate": 0.9167,
+                    }],
+                }, {
+                    "rank": 1, "itemSet": [{"id": 3153}, {"id": 3031}, {"id": 6673}],
+                    "sampleCount": 120, "winRate": 0.65, "pickRate": 0.15,
+                    "routes": [],
+                }],
+            }],
+        },
+        "unfiltered": {"archetypes": []},
+    },
 }
 
 
@@ -64,6 +98,7 @@ class StatsProviderTests(unittest.TestCase):
             resource_url("champions"): CHAMPIONS,
             resource_url("augments"): AUGMENTS,
             resource_url("summoner-spells"): SUMMONER_SPELLS,
+            resource_url("items"): ITEMS,
             detail_url(): DETAIL,
             detail_url(bracket="high"): DETAIL,
         }
@@ -437,6 +472,269 @@ class StatsProviderTests(unittest.TestCase):
             with self.subTest(champion_id=champion_id, bracket=bracket), self.assertRaises(ValueError):
                 self.provider.summoner_spells_for(champion_id, bracket)
         self.assertEqual(len(self.requests), count)
+
+
+
+    def test_item_sets_and_routes_keep_distinct_rates_and_order(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        result = self.provider.item_builds_for(157)
+        self.assertEqual((result["source"], result["scope"], result["champion_id"]), ("ARAMKit", "champion", "157"))
+        self.assertEqual((result["version"], result["data_date"], result["stale"]), ("16.21", "2026-10-24", False))
+        self.assertEqual(result["source_url"], "https://aramkit.com/en-US/champions/yasuo")
+        self.assertEqual(result["build_filter"], "filtered")
+        group = result["groups"][0]
+        self.assertEqual((group["key"], group["label"], group["sample_count"]), ("crit", "Crit", 800))
+        core = group["rows"][0]
+        self.assertEqual(core["rank"], 2)
+        self.assertEqual(core["item_ids"], ["3087", "3031", "6673"])
+        self.assertEqual(core["item_names"], ["Statikk Shiv", "Infinity Edge", "Immortal Shieldbow"])
+        self.assertEqual((core["win_rate"], core["sample_count"], core["pick_rate"]), (0.62, 600, 0.75))
+        self.assertFalse(core["ordered"])
+        self.assertFalse(core["low_sample"])
+        self.assertEqual(core["pick_rate_scope"], "build_group")
+        route = core["routes"][0]
+        self.assertEqual(route["item_ids"], ["3031", "3087", "6673"])
+        self.assertEqual(route["item_names"][0], "Infinity Edge")
+        self.assertEqual((route["win_rate"], route["sample_count"], route["pick_rate"]), (0.52, 50, 0.0833))
+        self.assertTrue(route["ordered"])
+        self.assertTrue(route["low_sample"])
+        self.assertEqual(route["pick_rate_scope"], "core_set")
+
+    def test_item_resources_are_on_demand_and_legacy_cache_is_reused(self):
+        self.responses[detail_url()] = {**ITEM_DETAIL, "summoners": SUMMONER_DETAIL["summoners"]}
+        self.provider.rate_for(157, 3078)
+        self.provider.summoner_spells_for(157)
+        self.assertNotIn(resource_url("items"), self.requests)
+        count = len(self.requests)
+        StatsProvider(Path(self.tmp.name)).item_builds_for(157)
+        self.assertEqual(self.requests[count:], [resource_url("items")])
+        self.provider.item_builds_for(157)
+        self.assertEqual(len(self.requests), count + 1)
+
+    def test_missing_item_builds_never_use_unfiltered_or_global_data(self):
+        for builds in ("absent", {}, {"filtered": {}}, {"filtered": {"archetypes": []}},
+                       {"unfiltered": ITEM_DETAIL["builds"]["filtered"]}):
+            with self.subTest(builds=builds), tempfile.TemporaryDirectory() as directory:
+                data = copy.deepcopy(DETAIL)
+                if builds != "absent":
+                    data["builds"] = builds
+                self.responses[detail_url()] = data
+                result = StatsProvider(Path(directory)).item_builds_for(157)
+                self.assertEqual(result["groups"], [])
+                self.assertFalse(result["stale"])
+        self.assertNotIn(resource_url("items"), self.requests)
+
+    def test_item_zero_samples_and_absent_rates_are_not_invented(self):
+        data = copy.deepcopy(ITEM_DETAIL)
+        group = data["builds"]["filtered"]["archetypes"][0]
+        group["sampleCount"] = 0
+        core = group["profiles"][0]
+        core["sampleCount"] = 0
+        core["routes"][0]["sampleCount"] = 0
+        del group["profiles"][1]["winRate"]
+        del group["profiles"][1]["pickRate"]
+        self.responses[detail_url()] = data
+        group = self.provider.item_builds_for(157)["groups"][0]
+        self.assertIsNone(group["win_rate"])
+        self.assertIsNone(group["rows"][0]["win_rate"])
+        self.assertIsNone(group["rows"][0]["routes"][0]["win_rate"])
+        self.assertTrue(group["rows"][0]["low_sample"])
+        self.assertIsNone(group["rows"][1]["win_rate"])
+        self.assertIsNone(group["rows"][1]["pick_rate"])
+
+    def test_item_rates_counts_and_ranks_are_validated_at_every_level(self):
+        for level in ("group", "core", "route"):
+            for field, invalid in [
+                ("winRate", -0.1), ("winRate", 1.1), ("winRate", True),
+                ("winRate", "0.5"), ("winRate", float("nan")), ("winRate", float("inf")),
+                ("pickRate", -0.1), ("pickRate", 1.1), ("pickRate", True),
+                ("sampleCount", -1), ("sampleCount", 1.5), ("sampleCount", True),
+                ("sampleCount", None), ("rank", 0), ("rank", True), ("rank", 1.5),
+            ]:
+                with self.subTest(level=level, field=field, invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                    data = copy.deepcopy(ITEM_DETAIL)
+                    row = data["builds"]["filtered"]["archetypes"][0]
+                    if level != "group":
+                        row = row["profiles"][0]
+                    if level == "route":
+                        row = row["routes"][0]
+                    row[field] = invalid
+                    self.responses[detail_url()] = data
+                    with self.assertRaises(DataUnavailableError):
+                        StatsProvider(Path(directory)).item_builds_for(157)
+
+    def test_item_ids_and_route_membership_are_validated(self):
+        for field in ("itemSet", "purchaseOrder"):
+            for invalid in (None, [], [{"id": 3031}], [None] * 3,
+                            [{"id": 3031}, {"id": 3087}, {"id": True}],
+                            [{"id": 3031}, {"id": 3087}, {"id": "../6673"}],
+                            [{"id": 3031}, {"id": 3087}, {"id": 0}]):
+                with self.subTest(field=field, invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                    data = copy.deepcopy(ITEM_DETAIL)
+                    row = data["builds"]["filtered"]["archetypes"][0]["profiles"][0]
+                    if field == "purchaseOrder":
+                        row = row["routes"][0]
+                    row[field] = invalid
+                    self.responses[detail_url()] = data
+                    with self.assertRaises(DataUnavailableError):
+                        StatsProvider(Path(directory)).item_builds_for(157)
+        data = copy.deepcopy(ITEM_DETAIL)
+        data["builds"]["filtered"]["archetypes"][0]["profiles"][0]["routes"][0]["purchaseOrder"][0]["id"] = 3153
+        self.responses[detail_url()] = data
+        with self.assertRaises(DataUnavailableError):
+            self.provider.item_builds_for(157)
+
+    def test_malformed_and_duplicate_item_groups_profiles_and_routes_are_errors(self):
+        for mode in ("builds", "filtered", "groups", "group", "key", "profiles", "profile",
+                     "routes", "route", "duplicate_group", "duplicate_core", "duplicate_route"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                data = copy.deepcopy(ITEM_DETAIL)
+                filtered = data["builds"]["filtered"]
+                group = filtered["archetypes"][0]
+                core = group["profiles"][0]
+                if mode == "builds":
+                    data["builds"] = None
+                elif mode == "filtered":
+                    data["builds"]["filtered"] = None
+                elif mode == "groups":
+                    filtered["archetypes"] = {}
+                elif mode == "group":
+                    filtered["archetypes"] = [None]
+                elif mode == "key":
+                    group["key"] = "../ap"
+                elif mode == "profiles":
+                    group["profiles"] = None
+                elif mode == "profile":
+                    group["profiles"] = [None]
+                elif mode == "routes":
+                    core["routes"] = {}
+                elif mode == "route":
+                    core["routes"] = [None]
+                elif mode == "duplicate_group":
+                    filtered["archetypes"] *= 2
+                elif mode == "duplicate_core":
+                    duplicate = copy.deepcopy(core)
+                    duplicate["itemSet"].reverse()
+                    group["profiles"].append(duplicate)
+                elif mode == "duplicate_route":
+                    core["routes"].append(copy.deepcopy(core["routes"][0]))
+                self.responses[detail_url()] = data
+                with self.assertRaises(DataUnavailableError):
+                    StatsProvider(Path(directory)).item_builds_for(157)
+
+    def test_invalid_item_data_does_not_break_augment_statistics(self):
+        self.responses[detail_url()] = {**DETAIL, "builds": "malformed"}
+        self.assertEqual(self.provider.rate_for(157, 3078)["win_rate"], 0.67)
+        with self.assertRaises(DataUnavailableError):
+            self.provider.item_builds_for(157)
+
+    def test_item_names_must_exist_in_verified_resources(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        for resources in ({"3031": {"name": "Infinity Edge"}},
+                          {**ITEMS, "3031": {"name": " "}},
+                          {**ITEMS, "../999": {"name": "Invalid"}}):
+            with self.subTest(resources=resources), tempfile.TemporaryDirectory() as directory:
+                self.responses[resource_url("items")] = resources
+                with self.assertRaises(DataUnavailableError):
+                    StatsProvider(Path(directory)).item_builds_for(157)
+
+    def test_item_builds_honor_bracket_and_reject_invalid_arguments(self):
+        self.responses[detail_url(bracket="high")] = ITEM_DETAIL
+        result = self.provider.item_builds_for("157", "high")
+        self.assertEqual(result["bracket"], "high")
+        self.assertIn(detail_url(bracket="high"), self.requests)
+        count = len(self.requests)
+        for champion_id, bracket in ((True, "all"), ("../157", "all"), (157, "../all")):
+            with self.subTest(champion_id=champion_id, bracket=bracket), self.assertRaises(ValueError):
+                self.provider.item_builds_for(champion_id, bracket)
+        self.assertEqual(len(self.requests), count)
+
+    def test_cached_item_builds_work_offline_with_stale_metadata(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        expected = self.provider.item_builds_for(157)
+        self.clock.return_value += MANIFEST_TTL + 1
+        self.responses[MANIFEST_URL] = URLError("offline")
+        count = len(self.requests)
+        result = StatsProvider(Path(self.tmp.name)).item_builds_for(157)
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["groups"], expected["groups"])
+        self.assertEqual(result["version"], "16.21")
+        self.assertEqual(self.requests[count:], [MANIFEST_URL])
+
+    def test_offline_without_item_names_reports_unavailable_not_empty(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        self.provider.rate_for(157, 3078)
+        self.responses[resource_url("items")] = URLError("offline")
+        with self.assertRaises(DataUnavailableError) as raised:
+            self.provider.item_builds_for(157)
+        self.assertTrue(raised.exception.transient)
+
+    def test_stale_item_champion_uses_its_original_resource_version(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        first = self.provider.item_builds_for(157)
+        self.next_version()
+        self.responses[detail_url(NEXT_VERSION)] = TimeoutError("offline")
+        result = self.provider.item_builds_for(157)
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["version"], "16.21")
+        self.assertEqual(result["groups"], first["groups"])
+        self.assertNotIn(resource_url("items", NEXT_VERSION), self.requests)
+
+    def test_item_resource_failure_falls_back_to_entire_snapshot_then_recovers(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        first = self.provider.item_builds_for(157)
+        self.next_version()
+        new_data = copy.deepcopy(ITEM_DETAIL)
+        new_data["builds"]["filtered"]["archetypes"][0]["profiles"][0]["winRate"] = 0.75
+        self.responses[detail_url(NEXT_VERSION)] = new_data
+        item_url = resource_url("items", NEXT_VERSION)
+        self.responses[item_url] = URLError("offline")
+        result = self.provider.item_builds_for(157)
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["version"], "16.21")
+        self.assertEqual(result["data_date"], "2026-10-24")
+        self.assertEqual(result["groups"], first["groups"])
+        attempts = len(self.requests)
+        result["groups"][0]["rows"][0]["item_names"][0] = "Mutated"
+        self.assertEqual(self.provider.item_builds_for(157)["groups"], first["groups"])
+        self.assertEqual(len(self.requests), attempts)
+        self.clock.return_value += RETRY_DELAY + 1
+        self.responses[item_url] = {**ITEMS, "3087": {"name": "New item name"}}
+        recovered = self.provider.item_builds_for(157)
+        self.assertFalse(recovered["stale"])
+        self.assertEqual(recovered["version"], "16.22")
+        self.assertEqual(recovered["data_date"], "2026-11-01")
+        self.assertEqual(recovered["groups"][0]["rows"][0]["win_rate"], 0.75)
+        self.assertEqual(recovered["groups"][0]["rows"][0]["item_names"][0], "New item name")
+
+    def test_invalid_new_item_resources_never_silently_use_old_builds(self):
+        for mode in ("malformed", "not_found"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                self.responses[MANIFEST_URL] = manifest()
+                self.responses[detail_url()] = ITEM_DETAIL
+                provider = StatsProvider(Path(directory))
+                provider.item_builds_for(157)
+                self.next_version()
+                self.responses[detail_url(NEXT_VERSION)] = ITEM_DETAIL
+                item_url = resource_url("items", NEXT_VERSION)
+                self.responses[item_url] = (
+                    {"3031": {"name": "Infinity Edge"}} if mode == "malformed"
+                    else HTTPError(item_url, 404, "Not found", {}, None)
+                )
+                with self.assertRaises(DataUnavailableError) as raised:
+                    provider.item_builds_for(157)
+                self.assertFalse(raised.exception.transient)
+
+    def test_empty_new_item_snapshot_does_not_reuse_previous_builds(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        self.provider.item_builds_for(157)
+        self.next_version()
+        self.responses[detail_url(NEXT_VERSION)] = DETAIL
+        result = self.provider.item_builds_for(157)
+        self.assertEqual(result["groups"], [])
+        self.assertEqual(result["version"], "16.22")
+        self.assertFalse(result["stale"])
+        self.assertNotIn(resource_url("items", NEXT_VERSION), self.requests)
 
 
 if __name__ == "__main__":

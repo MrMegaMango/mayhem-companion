@@ -14,8 +14,27 @@ ABOVE = display("above", (0, -1080, 1920, 0), (0, -1080, 1920, -40))
 
 
 class DisplaySelectionTests(unittest.TestCase):
-    def test_preferred_device_wins_over_saved_position_and_orientation(self):
-        self.assertIs(select_display([PRIMARY, PORTRAIT], "PRIMARY", True, (-1000, 0)), PRIMARY)
+    def test_preferred_device_wins_over_saved_position_without_orientation_preference(self):
+        self.assertIs(select_display([PRIMARY, PORTRAIT], "PRIMARY", False, (-1000, 0)), PRIMARY)
+
+    def test_reused_windows_device_id_does_not_override_portrait_preference(self):
+        landscape = {**PRIMARY, "device": r"\\.\DISPLAY2"}
+        portrait = {**PORTRAIT, "device": r"\\.\DISPLAY1"}
+        self.assertIs(select_display([landscape, portrait], r"\\.\DISPLAY2", True,
+                                     (300, 80)), portrait)
+
+    def test_saved_portrait_device_still_wins_over_another_portrait_position(self):
+        second = display("right", (3840, 0, 4920, 1920))
+        self.assertIs(select_display([PRIMARY, PORTRAIT, second], "portrait", True,
+                                     (4000, 100)), PORTRAIT)
+
+    def test_without_portrait_saved_landscape_device_remains_preferred(self):
+        self.assertIs(select_display([PRIMARY, ABOVE], "above", True, (300, 80)), ABOVE)
+
+    def test_reused_landscape_id_uses_saved_position_among_portraits(self):
+        second = display("right", (3840, 0, 4920, 1920))
+        self.assertIs(select_display([PRIMARY, PORTRAIT, second], "primary", True,
+                                     (4000, 100)), second)
 
     def test_portrait_preference_moves_off_primary(self):
         self.assertIs(select_display([PRIMARY, PORTRAIT], prefer_portrait=True, position=(300, 80)), PORTRAIT)
