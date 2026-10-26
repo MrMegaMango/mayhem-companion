@@ -62,6 +62,8 @@ class Companion:
         self.champion = self.live_champion = None
         self.follow = True
         self.hidden = True
+        self._placement_job = None
+        self._last_display = None
         self.locked = self.game_live = False
         self.auto_visible = self.browse_mode = False
         self.visibility_override = None
@@ -135,6 +137,7 @@ class Companion:
         for widget in [header, brand, self.badge]:
             widget.bind("<ButtonPress-1>", self.start_drag)
             widget.bind("<B1-Motion>", self.drag)
+            widget.bind("<ButtonRelease-1>", self.end_drag)
         self.body = tk.Frame(self.shell, bg=BG)
         self.body.pack(fill="both", expand=True, padx=16)
         champ_row = tk.Frame(self.body, bg=BG)
@@ -229,6 +232,10 @@ class Companion:
     def drag(self, event):
         if self.drag_start:
             self.root.geometry(f"+{event.x_root-self.drag_start[0]}+{event.y_root-self.drag_start[1]}")
+
+    def end_drag(self, _event):
+        self.drag_start = None
+        self.schedule_placement_check()
 
     def filter_champions(self, event):
         if event.keysym not in ("Return", "Up", "Down", "Escape"):
@@ -478,12 +485,18 @@ class Companion:
             displays = list_displays()
         except OSError:
             displays = []
+        # A momentary monitor-query failure must not send a known portrait
+        # placement back to the primary screen. A real unplug still returns
+        # the remaining monitors and uses the normal fallback below.
+        if not displays and self._last_display is not None:
+            displays = [self._last_display]
         if not displays:
             bounds = (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
             displays = [{"device": "fallback", "bounds": bounds, "work_area": bounds, "primary": True}]
         display = select_display(displays, preferred_device=self.settings.get("display_device"),
                                  prefer_portrait=self.settings.get("display_preference") == "portrait",
                                  position=position)
+        self._last_display = display
         return place_panel(display, 440, height, position)
 
     def fit_window(self):
@@ -491,6 +504,34 @@ class Companion:
         x, y, height = self.panel_placement(self.shell.winfo_reqheight(),
                                            (self.root.winfo_x(), self.root.winfo_y()))
         self.root.geometry(f"440x{height}+{x}+{y}")
+
+    def cancel_placement_check(self):
+        if self._placement_job is not None:
+            self.root.after_cancel(self._placement_job)
+            self._placement_job = None
+
+    def schedule_placement_check(self, delay=150):
+        self.cancel_placement_check()
+        if not self._closed and not self.hidden:
+            self._placement_job = self.root.after(delay, self.check_placement)
+
+    def check_placement(self):
+        self._placement_job = None
+        if self._closed or self.hidden:
+            return
+        try:
+            if self.drag_start is not None:
+                return
+            actual_x, actual_y = self.root.winfo_x(), self.root.winfo_y()
+            x, y, height = self.panel_placement(self.shell.winfo_reqheight(), (actual_x, actual_y))
+            actual = (actual_x, actual_y, self.root.winfo_width(), self.root.winfo_height())
+            if any(abs(current - wanted) > 2 for current, wanted in zip(actual, (x, y, 440, height))):
+                self.root.geometry(f"440x{height}+{x}+{y}")
+        finally:
+            # Windows may relocate a window during mapping, DPI changes or a
+            # monitor reconnect. Correct only an actual mismatch; the tolerance
+            # avoids repeated geometry updates from DPI rounding.
+            self.schedule_placement_check(1500)
 
     def lookup_spells(self, force=False):
         if not force and self.spell_champion == self.champion:
@@ -593,6 +634,8 @@ class Companion:
     def show_from_tray(self):
         # The tray must also recover a click-through panel without a shortcut.
         self.unlock_panel()
+        if not self.hidden:
+            self.fit_window()
         self.set_manual_visible(True)
 
     def unlock_panel(self):
@@ -637,15 +680,19 @@ class Companion:
 
     def set_visible(self, visible):
         if visible == (not self.hidden):
+            if visible and self._placement_job is None:
+                self.schedule_placement_check()
             return
         self.hidden = not visible
         if not visible:
+            self.cancel_placement_check()
             self.root.withdraw()
         else:
             self.fit_window()
             self.root.deiconify()
             self.root.attributes("-topmost", True)
             set_window_style(self.root, self.locked)
+            self.schedule_placement_check()
 
     def update_visibility(self, game):
         phase = game.get("phase")
@@ -925,6 +972,7 @@ class Companion:
         if self._closed:
             return
         self._closed = True
+        self.cancel_placement_check()
         self.stop.set()
         if hasattr(self, "tray"):
             self.tray.close()

@@ -30,6 +30,9 @@ class StateTests(unittest.TestCase):
         app.live_champion = "157"
         app.locked = False
         app.hidden = True
+        app._placement_job = None
+        app._last_display = None
+        app.drag_start = None
         app.auto_visible = app.browse_mode = False
         app.visibility_override = None
         app.hotkeys = Mock()
@@ -96,6 +99,63 @@ class StateTests(unittest.TestCase):
         self.assertLessEqual(x + 440, 0)
         self.assertGreaterEqual(y, -400)
         self.assertLessEqual(y + height, 1480)
+
+    def test_monitor_query_failure_preserves_last_display_but_real_unplug_uses_fallback(self):
+        app = self.make_view()
+        app.settings = {"display_preference": "portrait"}
+        portrait = {"device": "portrait", "bounds": (-1080, 233, 0, 2153),
+                    "work_area": (-1080, 233, 0, 2105), "primary": False}
+        landscape = {"device": "main", "bounds": (0, 0, 3840, 2160),
+                     "work_area": (0, 0, 3840, 2088), "primary": True}
+        with patch("mayhem.app.list_displays", side_effect=[[portrait, landscape], OSError("temporary"), [landscape]]):
+            expected = app.panel_placement(600, [-464, 313])
+            self.assertEqual(app.panel_placement(600, [-464, 313]), expected)
+            self.assertGreater(app.panel_placement(600, [-464, 313])[0], 0)
+
+    def test_visible_position_check_repairs_windows_relocation_and_keeps_one_timer(self):
+        app = self.make_view()
+        app.hidden = False
+        app.shell = Mock()
+        app.shell.winfo_reqheight.return_value = 900
+        app.root.winfo_x.return_value, app.root.winfo_y.return_value = 3000, 100
+        app.root.winfo_width.return_value, app.root.winfo_height.return_value = 440, 900
+        app.panel_placement = Mock(return_value=(-464, 313, 900))
+        app.check_placement()
+        app.root.geometry.assert_called_once_with("440x900+-464+313")
+        app.root.after.assert_called_once_with(1500, app.check_placement)
+        app.set_visible(True)
+        app.set_visible(True)
+        app.root.after.assert_called_once()
+
+    def test_correct_position_and_dpi_rounding_do_not_keep_resizing_window(self):
+        app = self.make_view()
+        app.hidden = False
+        app.shell = Mock()
+        app.root.winfo_x.return_value, app.root.winfo_y.return_value = -463, 314
+        app.root.winfo_width.return_value, app.root.winfo_height.return_value = 441, 901
+        app.panel_placement = Mock(return_value=(-464, 313, 900))
+        app.check_placement()
+        app.root.geometry.assert_not_called()
+
+    def test_hide_cancels_position_check_and_stale_callback_does_not_restart_it(self):
+        app = self.make_view()
+        app.hidden = False
+        app._placement_job = "placement-timer"
+        app.set_visible(False)
+        app.root.after_cancel.assert_called_once_with("placement-timer")
+        app.check_placement()
+        app.root.after.assert_not_called()
+
+    def test_drag_defers_correction_until_release_and_does_not_disable_future_checks(self):
+        app = self.make_view()
+        app.hidden = False
+        app.drag_start = (10, 10)
+        app.panel_placement = Mock()
+        app.check_placement()
+        app.panel_placement.assert_not_called()
+        app.end_drag(None)
+        self.assertIsNone(app.drag_start)
+        app.root.after.assert_called_with(150, app.check_placement)
 
     def test_close_preserves_display_preference_and_negative_position(self):
         app = self.make_view()
