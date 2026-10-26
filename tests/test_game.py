@@ -198,6 +198,61 @@ class SummonerSpellTests(unittest.TestCase):
             self.assertEqual(game.poll_active_player()["summoner_spells"], [])
         with patch.object(game, "_get_json", side_effect=ValueError("bad JSON")):
             self.assertEqual(game.poll_active_player()["summoner_spells"], [])
+class InventoryTests(unittest.TestCase):
+    def poll(self, items, *, metadata=None):
+        player = {"riotId": "Private#Secret", "championName": "Annie", "items": items}
+        other = {"riotId": "Other#Secret", "championName": "Ashe",
+                 "items": [{"slot": 0, "itemID": 9999}]}
+        with patch.object(game, "_get_json", side_effect=["Private#Secret", [other, player],
+                          {} if metadata is None else metadata]) as request:
+            result = game.poll_active_player()
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(result["status"], "live")
+        self.assertEqual(result["champion_name"], "Annie")
+        return result
+
+    def test_only_active_inventory_ids_are_returned_in_slot_order(self):
+        result = self.poll([
+            {"slot": 3, "itemID": 3089, "displayName": "Private item label"},
+            {"slot": 0, "itemID": 1052, "count": 1},
+            {"slot": 1, "itemID": 2003, "count": 3},
+            {"slot": 2, "itemID": 1001},
+            {"slot": 4, "itemID": 1052},
+            {"slot": 5, "itemID": 3137},
+            {"slot": 6, "itemID": 2052},
+        ])
+        self.assertEqual(result["item_ids"], ["1052", "2003", "1001", "3089", "1052", "3137"])
+        for value in ("Private", "Secret", "Other", "9999", "2052", "displayName", "count"):
+            self.assertNotIn(value, json.dumps(result))
+
+    def test_explicit_empty_is_distinct_from_missing_or_malformed_inventory(self):
+        self.assertEqual(self.poll([])["item_ids"], [])
+        self.assertIsNone(game._inventory_item_ids({}))
+        for value in (None, {}, "items", [None], [{"itemID": 3089}],
+                      [{"slot": True, "itemID": 3089}], [{"slot": 0, "itemID": True}],
+                      [{"slot": 0, "itemID": 0}], [{"slot": 0, "itemID": "Private"}],
+                      [{"slot": 7, "itemID": 3089}], [{"slot": 0, "itemID": 3089.5}],
+                      [{"slot": 0, "itemID": 3089}, {"slot": 0, "itemID": 3137}]):
+            with self.subTest(value=value):
+                self.assertIsNone(self.poll(value)["item_ids"])
+
+    def test_trinket_only_is_known_empty_six_slot_inventory(self):
+        self.assertEqual(self.poll([{"slot": 6, "itemID": 2052}])["item_ids"], [])
+
+    def test_inventory_changes_are_reflected_and_metadata_failure_does_not_drop_it(self):
+        first = self.poll([{"slot": 2, "itemID": 1052}])
+        second = self.poll([{"slot": 0, "itemID": 3089}], metadata=URLError("Unavailable"))
+        self.assertEqual(first["item_ids"], ["1052"])
+        self.assertEqual(second["item_ids"], ["3089"])
+        self.assertEqual(self.poll([])["item_ids"], [])
+
+    def test_nonlive_inventory_is_unknown_not_a_fabricated_empty_inventory(self):
+        with patch.object(game, "_get_json", side_effect=URLError("offline")):
+            result = game.poll_active_player()
+        self.assertEqual(result["status"], "waiting")
+        self.assertIsNone(result["item_ids"])
+
+
 class LocalTransportTests(unittest.TestCase):
     def test_only_known_loopback_paths_accepted(self):
         with patch.object(game, "build_opener") as builder:

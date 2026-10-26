@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import ctypes
 import json
 import logging
@@ -88,6 +89,10 @@ class Companion:
         self.build_cards = []
         self.item_images = {}
         self.live_spells = []
+        self.live_items = None
+        self.inventory_champion = None
+        self.inventory_current = False
+        self.build_order_key = None
         self.build()
         self.icons = IconLoader(self.events, self.stop, self.storage / "cache" / "icons")
         self.icons.start()
@@ -362,6 +367,27 @@ class Companion:
         self.build_summary = tk.StringVar(value="Choose a champion to see core builds.")
         self.label(self.build_panel, size=9, color=MUTED, textvariable=self.build_summary,
                    wraplength=398, anchor="w", justify="left").pack(fill="x", pady=(0, 8))
+        self.build_context_panel = tk.Frame(self.build_panel, bg=BG)
+        order_bar = tk.Frame(self.build_context_panel, bg=BG)
+        order_bar.pack(fill="x", pady=(0, 6))
+        self.label(order_bar, "Core purchase order", 8, MUTED).pack(side="left")
+        self.build_order = tk.StringVar(value="")
+        self.build_order_box = ttk.Combobox(order_bar, textvariable=self.build_order,
+                                           state="readonly", width=23)
+        self.build_order_box.pack(side="right")
+        self.build_order_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
+        core = tk.Frame(self.build_context_panel, bg=BG)
+        core.pack(fill="x")
+        self.build_core_items = []
+        for index in range(3):
+            core.columnconfigure(index, weight=1, uniform="core")
+            cell = tk.Frame(core, bg=BG)
+            cell.grid(row=0, column=index, sticky="nsew", padx=3)
+            icon = tk.Label(cell, bg=BG, bd=0)
+            icon.pack()
+            name = self.label(cell, size=8, color=TEXT, wraplength=120, justify="center")
+            name.pack(fill="x", pady=(3, 0))
+            self.build_core_items.append({"icon": icon, "name": name, "icon_url": None})
         for _ in range(5):
             frame = tk.Frame(self.build_panel, bg=PANEL, padx=12, pady=9)
             top = tk.Frame(frame, bg=PANEL)
@@ -384,7 +410,7 @@ class Companion:
                 icon.pack(fill="both", expand=True)
                 name = self.label(item_row, size=9, color=TEXT, wraplength=190, anchor="w", justify="left")
                 name.pack(side="left", fill="x", expand=True)
-                items.append({"icon": icon, "name": name, "icon_url": None})
+                items.append({"frame": item_row, "icon": icon, "name": name, "icon_url": None})
             meta = self.label(frame, size=8, color=MUTED, wraplength=374, anchor="w", justify="left")
             meta.pack(fill="x", pady=(5, 0))
             self.build_cards.append({"frame": frame, "items": items, "value": value, "meta": meta})
@@ -420,6 +446,8 @@ class Companion:
         self.build_token += 1
         self.build_champion = self.champion
         self.build_data = None
+        self.build_order_key = None
+        self.build_context_panel.pack_forget()
         self.build_group.set("")
         self.build_group_box["values"] = []
         for card in self.build_cards:
@@ -432,50 +460,123 @@ class Companion:
         if self.champion:
             self.requests.put(("builds", (self.build_token, self.champion)))
 
+    def completed_items(self):
+        if (not self.game_live or self.champion != self.inventory_champion
+                or self.live_items is None or self.build_data is None):
+            return None
+        catalog = self.build_data.get("item_catalog", {})
+        return [catalog[item_id].get("canonical_id", item_id) for item_id in self.live_items
+                if item_id in catalog and catalog[item_id].get("is_final")
+                and not catalog[item_id].get("is_boots")]
+
+    def render_build_item(self, item, name, url):
+        item["name"].configure(text=name)
+        item["icon_url"] = url
+        photo = self.item_images.get(url)
+        item["icon"].configure(image=photo if photo is not None else "")
+        if url and photo is None:
+            self.icons.request(url)
+
     def render_builds(self):
+        self.build_context_panel.pack_forget()
         for card in self.build_cards:
             card["frame"].pack_forget()
+            for item in card["items"]:
+                item["icon_url"] = None
+        for item in self.build_core_items:
+            item["icon_url"] = None
         if self.view.get() == "builds":
             self.status.set("Watching for augment choices…" if self.follow and self.game_live and self.auto.get()
-                            else "Browsing core builds for the selected champion")
+                            else "Browsing builds for the selected champion")
         if self.build_data is None:
             if self.view.get() == "builds":
                 self.source.set("ARAMKit · core-build data")
             return
         groups = [group for group in self.build_data["groups"] if group["rows"]]
+        completed = self.completed_items()
+        later = completed is not None and len(completed) >= 3
+        if later:
+            # Inventory slots do not reveal purchase order. Match an owned
+            # core set, then disclose/select the source's actual order below.
+            owned = Counter(completed)
+            matches = []
+            for group in groups:
+                for index, profile in enumerate(group["rows"], 1):
+                    catalog = self.build_data.get("item_catalog", {})
+                    if Counter(catalog.get(item_id, {}).get("canonical_id", item_id)
+                               for item_id in profile["item_ids"]) <= owned:
+                        matches.append({**group, "label": f"{group['label']} · core {index}",
+                                        "profile": profile})
+            groups = sorted(matches, key=lambda group: group["profile"]["sample_count"], reverse=True)
         self.build_group_box["values"] = [group["label"] for group in groups]
         if not groups:
-            self.build_summary.set("No core-build data for this champion.")
-            self.build_note.set("")
+            self.build_group.set("")
+            self.build_summary.set("No follow-up data matches your completed items." if later
+                                   else "No core-build data for this champion.")
+            self.build_note.set(f"{len(completed)} completed items detected · no matching core in this sample."
+                                if later else "")
         else:
             group = next((group for group in groups if group["label"] == self.build_group.get()), groups[0])
             self.build_group.set(group["label"])
+            rows = group["rows"]
+            if later:
+                profile = group["profile"]
+                routes = sorted(profile.get("routes", []), key=lambda route: route["sample_count"], reverse=True)
+                labels = [("Most played" if i == 0 else f"Order {i + 1}")
+                          + f" · {compact_count(route['sample_count'])}" for i, route in enumerate(routes)]
+                order_key = (self.champion, tuple(profile["item_ids"]))
+                if self.build_order_key != order_key or self.build_order.get() not in labels:
+                    self.build_order.set(labels[0] if labels else "No order data")
+                self.build_order_key = order_key
+                self.build_order_box["values"] = labels
+                route = routes[labels.index(self.build_order.get())] if labels else None
+                core = route or profile
+                for index, item in enumerate(self.build_core_items):
+                    urls = core.get("item_icon_urls", [])
+                    self.render_build_item(item, f"{index + 1}. {core['item_names'][index]}",
+                                           urls[index] if index < len(urls) else None)
+                self.build_context_panel.pack(fill="x", pady=(0, 10), before=self.build_note_label)
+                catalog = self.build_data.get("item_catalog", {})
+                owned_ids = {catalog.get(item_id, {}).get("canonical_id", item_id) for item_id in self.live_items}
+                rows = [row for row in route.get("later_items", [])
+                        if catalog.get(row["item_ids"][0], {}).get("canonical_id", row["item_ids"][0])
+                        not in owned_ids] if route else []
+            else:
+                self.build_order_key = None
             sort_key = {"Win rate": "win_rate", "Games": "sample_count", "Pick rate": "pick_rate"}[self.build_sort.get()]
-            rows = sorted(group["rows"], key=lambda row: (
+            rows = sorted(rows, key=lambda row: (
                 row.get(sort_key) if row.get(sort_key) is not None else -1, row["sample_count"]), reverse=True)
-            self.build_summary.set(f"Core builds · {min(len(rows), len(self.build_cards))} of {len(rows)} sets")
+            if later:
+                self.build_summary.set(f"Follow-up items · {len(completed)} completed · "
+                                       f"{min(len(rows), len(self.build_cards))} of {len(rows)} options"
+                                       if rows else "No unowned follow-up items in this order's sample.")
+            else:
+                self.build_summary.set(f"Core builds · {min(len(rows), len(self.build_cards))} of {len(rows)} sets")
             for card, row in zip(self.build_cards, rows):
                 count, rate, pick = row["sample_count"], row["win_rate"], row.get("pick_rate")
                 low = count < 200
                 urls = row.get("item_icon_urls", [])
                 for index, item in enumerate(card["items"]):
-                    item["name"].configure(text=row["item_names"][index])
+                    if index >= len(row["item_names"]):
+                        item["frame"].pack_forget()
+                        continue
+                    item["frame"].pack(fill="x", pady=2)
                     url = urls[index] if index < len(urls) else None
-                    item["icon_url"] = url
-                    photo = self.item_images.get(url)
-                    item["icon"].configure(image=photo if photo is not None else "")
-                    if url and photo is None:
-                        self.icons.request(url)
+                    self.render_build_item(item, row["item_names"][index], url)
                 card["value"].configure(text=f"{rate * 100:.1f}%" if rate is not None and count else "—")
                 parts = [f"{compact_count(count)} games"]
                 if pick is not None:
-                    parts.append(f"{pick * 100:.1f}% of {group['label']} builds")
+                    parts.append(f"{pick * 100:.1f}% of this order" if later
+                                 else f"{pick * 100:.1f}% of {group['label']} builds")
                 if low:
                     parts.append("LOW SAMPLE")
                 card["meta"].configure(text=" · ".join(parts), fg=AMBER if low else MUTED)
                 card["frame"].pack(fill="x", pady=(0, 7), before=self.build_note_label)
-            self.build_note.set("Core item sets · filtered sample · not purchase order."
+            self.build_note.set(("Per-item rates after the core order shown · filtered sample."
+                                 if later else "Core item sets · filtered sample · not purchase order.")
                                 + (" Cached data." if self.build_data.get("stale") else ""))
+        if later and not self.inventory_current:
+            self.build_note.set(self.build_note.get() + " Inventory unavailable; using last known items.")
         if self.view.get() == "builds":
             self.update_source(self.build_data)
             self.root.after_idle(self.fit_window)
@@ -754,6 +855,9 @@ class Companion:
                 for item in card["items"]:
                     if item["icon_url"] == url:
                         item["icon"].configure(image=photo)
+            for item in self.build_core_items:
+                if item["icon_url"] == url:
+                    item["icon"].configure(image=photo)
         elif kind == "tray_action":
             if payload == "show":
                 self.show_from_tray()
@@ -873,6 +977,9 @@ class Companion:
             self.last_active_status = None
         previous_spells = self.live_spells
         self.live_spells = game.get("summoner_spells", []) if active else []
+        previous_items = self.live_items
+        previous_inventory_current = self.inventory_current
+        self.inventory_current = self.game_live and game.get("item_ids") is not None
         ident = None
         if active and self.catalog:
             candidate = str(game.get("champion_id"))
@@ -882,6 +989,15 @@ class Companion:
         changed = ident != self.live_champion
         phase_changed = previous_status != self.game_status
         self.live_champion = ident
+        if self.game_live and ident:
+            if ident != self.inventory_champion:
+                self.live_items = None
+            self.inventory_champion = ident
+            if game.get("item_ids") is not None:
+                self.live_items = list(game["item_ids"])
+        elif self.champ_select or self.last_active_status is None:
+            self.inventory_champion = None
+            self.live_items = None
         if self.follow:
             if changed or phase_changed or self.champion != ident:
                 self.champion = ident
@@ -903,6 +1019,9 @@ class Companion:
             self.render_spells()
         elif self.view.get() == "spells":
             self.update_spell_status()
+        if (changed or phase_changed or previous_items != self.live_items
+                or previous_inventory_current != self.inventory_current) and self.view.get() == "builds":
+            self.render_builds()
 
     def render_rates(self, rates):
         metadata = next((rate for rate in rates if rate), None)
@@ -954,6 +1073,11 @@ class Companion:
             "Builds opens during play between augment choices. It shows the most-played core item sets "
             "for your champion, with win rates, pick rates and game counts. Switch build type or sorting above the sets. "
             "The filtered core item sets are not a purchase order. "
+            "After three completed non-boot items, Builds matches your inventory to a core set and shows "
+            "follow-up item rates, excluding items you own. These are individual later-item rates, not a "
+            "six-item combination's win rate. The core purchase order defaults to the most-played order; "
+            "choose another order above the icons if it matches what you bought. Boots and components "
+            "do not count toward the three-item trigger. "
             "Detected choices open Augments, then Builds returns after they disappear. "
             "Manual tab changes stay until the next selection or game phase.\n\n"
             "Rates come from ARAMKit's third-party sample, not all servers. Low samples are marked; "

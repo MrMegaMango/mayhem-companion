@@ -247,6 +247,26 @@ def _core_item_ids(items: object) -> list[str]:
     return ids
 
 
+def _later_item_rows(route: dict) -> list[dict]:
+    """Later-item observations are conditional on this exact purchase route."""
+    source = route.get("laterItems", [])
+    if not isinstance(source, list):
+        raise DataUnavailableError("Invalid ARAMKit follow-up items")
+    rows, seen = [], set()
+    for row in source:
+        stats = _build_stats(row)
+        item = row.get("item")
+        try:
+            item_id = _identifier(item.get("id") if isinstance(item, dict) else None)
+        except ValueError as error:
+            raise DataUnavailableError("Invalid ARAMKit follow-up item ID") from error
+        if item_id in seen:
+            raise DataUnavailableError("Duplicate ARAMKit follow-up item")
+        seen.add(item_id)
+        rows.append({**stats, "item_ids": [item_id], "pick_rate_scope": "purchase_route"})
+    return rows
+
+
 def _item_build_groups(detail: dict) -> list[dict]:
     """Keep core-set rates separate from their ordered purchase-route rates."""
     builds = detail.get("builds", {})
@@ -293,6 +313,7 @@ def _item_build_groups(detail: dict) -> list[dict]:
                 routes.append({
                     **route_stats, "item_ids": route_ids, "ordered": True,
                     "pick_rate_scope": "core_set",
+                    "later_items": _later_item_rows(route),
                 })
             rows.append({
                 **profile_stats, "item_ids": ids, "ordered": False,
@@ -321,6 +342,49 @@ def _item_resource(data: object) -> dict:
     return data
 
 
+def _item_catalog(resources: dict) -> dict:
+    """Classify explicitly final items and only reciprocal pure transforms."""
+    catalog = {}
+    for item_id, resource in resources.items():
+        categories = resource.get("categories")
+        known_categories = isinstance(categories, list) and all(isinstance(value, str) for value in categories)
+        catalog[item_id] = {
+            "name": resource["name"],
+            "is_final": (
+                resource.get("isFinal") is True and known_categories
+                and not any(value in categories for value in ("Consumable", "Trinket"))
+            ),
+            "is_boots": known_categories and "Boots" in categories,
+            "canonical_id": item_id,
+        }
+    for item_id, resource in resources.items():
+        parents = resource.get("from")
+        if (
+            resource.get("acquisition") != "transform"
+            or resource.get("purchasable") is not False
+            or not catalog[item_id]["is_final"]
+            or not isinstance(parents, list) or len(parents) != 1
+        ):
+            continue
+        try:
+            parent_id = _identifier(parents[0])
+            parent = resources.get(parent_id, {})
+            targets = parent.get("to")
+            if not isinstance(targets, list) or item_id not in [_identifier(value) for value in targets]:
+                continue
+        except ValueError:
+            continue
+        if (
+            parent_id != item_id and parent_id in catalog
+            and catalog[parent_id]["is_final"]
+            and parent.get("purchasable") is True
+            and parent.get("acquisition") == "shop"
+            and catalog[parent_id]["is_boots"] == catalog[item_id]["is_boots"]
+        ):
+            catalog[item_id]["canonical_id"] = parent_id
+    return catalog
+
+
 def _item_icon_url(value: object) -> str | None:
     """Resolve optional content-addressed icons; reject every other URL/path."""
     if not isinstance(value, str):
@@ -336,7 +400,10 @@ def _named_item_builds(groups: list[dict], resources: dict) -> list[dict]:
     groups = copy.deepcopy(groups)
     for group in groups:
         for profile in group["rows"]:
-            for row in [profile, *profile["routes"]]:
+            rows = [profile]
+            for route in profile["routes"]:
+                rows.extend([route, *route["later_items"]])
+            for row in rows:
                 if any(item_id not in resources for item_id in row["item_ids"]):
                     raise DataUnavailableError("ARAMKit item names do not match the statistics")
                 row["item_names"] = [resources[item_id]["name"] for item_id in row["item_ids"]]
@@ -659,7 +726,7 @@ class StatsProvider:
             }
         return result
 
-    def _last_item_builds(self, champion_id: str, bracket: str) -> tuple[list[dict], dict] | None:
+    def _last_item_builds(self, champion_id: str, bracket: str) -> tuple[list[dict], dict, dict] | None:
         version = self._read_json(self.cache_dir / f"last-items-{champion_id}-{bracket}.json")
         try:
             _version_row(version)
@@ -674,11 +741,11 @@ class StatsProvider:
         try:
             groups = _item_build_groups(cached["data"])
             if not any(group["rows"] for group in groups):
-                return groups, version
+                return groups, {}, version
             resources = self._cached(self._resource_url(version, "items"), _item_resource)
             if resources is None:
                 return None
-            return _named_item_builds(groups, resources["data"]), version
+            return _named_item_builds(groups, resources["data"]), _item_catalog(resources["data"]), version
         except DataUnavailableError:
             return None
 
@@ -687,7 +754,8 @@ class StatsProvider:
 
         Core rows are unordered three-item sets; nested routes retain actual
         purchase order and their own observations. Their pick rates refer to
-        the build group and core set respectively. Only ARAMKit's filtered
+        the build group and core set respectively. Route later_items are
+        individual follow-up rates, never joint six-item rates. Only ARAMKit's filtered
         builds are used, with matching item names from the same snapshot.
         Missing observations produce empty groups; malformed/unavailable data
         raises. Transport fallback keeps an entire older snapshot and its date.
@@ -705,6 +773,7 @@ class StatsProvider:
             return copy.deepcopy(fallback["result"])
 
         groups = _item_build_groups(detail)
+        item_catalog = {}
         stale = self._detail_meta[key]["stale"]
         used_version = version
         try:
@@ -713,6 +782,7 @@ class StatsProvider:
                     self._resource_url(version, "items"), _item_resource,
                 )
                 groups = _named_item_builds(groups, resources)
+                item_catalog = _item_catalog(resources)
                 stale = stale or resource_stale
             self._write_json(self.cache_dir / f"last-items-{champion_id}-{bracket}.json", version)
             self._item_fallbacks.pop(key, None)
@@ -720,7 +790,7 @@ class StatsProvider:
             previous = self._last_item_builds(champion_id, bracket) if error.transient else None
             if previous is None:
                 raise
-            groups, used_version = previous
+            groups, item_catalog, used_version = previous
             stale = True
 
         result = {
@@ -731,6 +801,7 @@ class StatsProvider:
             "bracket": bracket,
             "build_filter": "filtered",
             "groups": groups,
+            "item_catalog": item_catalog,
         }
         if used_version != version:
             self._item_fallbacks[key] = {

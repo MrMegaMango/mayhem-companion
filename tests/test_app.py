@@ -59,8 +59,15 @@ class StateTests(unittest.TestCase):
         app.build_champion = "157"
         app.build_data = None
         app.build_cards = [{"frame": Mock(), "value": Mock(), "meta": Mock(),
-                            "items": [{"icon": Mock(), "name": Mock(), "icon_url": None} for _ in range(3)]}
+                            "items": [{"frame": Mock(), "icon": Mock(), "name": Mock(), "icon_url": None} for _ in range(3)]}
                            for _ in range(5)]
+        app.build_context_panel = Mock()
+        app.build_core_items = [{"icon": Mock(), "name": Mock(), "icon_url": None} for _ in range(3)]
+        app.build_order, app.build_order_box = Mock(), MagicMock()
+        app.build_order_key = None
+        app.live_items = None
+        app.inventory_champion = None
+        app.inventory_current = False
         app.item_images = {}
         app.icons = Mock()
         app.build_group, app.build_sort = Mock(), Mock()
@@ -667,6 +674,113 @@ class StateTests(unittest.TestCase):
         items[1]["icon"].configure.assert_called_with(image="")
         items[1]["name"].configure.assert_called_with(text="Second")
         app.icons.request.assert_called_once_with(urls[2])
+
+    def followup_view(self):
+        app = self.make_view()
+        app.view.get.return_value = "builds"
+        app.inventory_champion = "157"
+        app.inventory_current = True
+        app.live_items = ["1", "2", "3"]
+        # StringVars behave like the real widgets so subsequent renders retain
+        # the user's core and order choices.
+        for variable, initial in ((app.build_group, "AP"), (app.build_order, "")):
+            variable.get.return_value = initial
+            variable.set.side_effect = lambda value, variable=variable: setattr(variable.get, "return_value", value)
+        later = lambda ident, name, count, rate: {
+            "item_ids": [ident], "item_names": [name], "item_icon_urls": [None],
+            "sample_count": count, "win_rate": rate, "pick_rate": .3}
+        core = {"item_ids": ["1", "2", "3"], "item_names": ["One", "Two", "Three"],
+                "sample_count": 1000, "win_rate": .51, "pick_rate": .8}
+        app.build_data = {"groups": [{"label": "AP", "rows": [{**core, "routes": [
+            {**core, "later_items": [later("4", "Four", 400, .56), later("5", "Five", 100, .6)]},
+            {**core, "item_ids": ["3", "2", "1"], "item_names": ["Three", "Two", "One"],
+             "sample_count": 200, "later_items": [later("6", "Six", 90, .58)]}]}]}],
+            "item_catalog": {str(i): {"is_final": True, "is_boots": False, "canonical_id": str(i)}
+                             for i in range(1, 7)}}
+        app.build_note.get.side_effect = lambda: app.build_note.set.call_args.args[0]
+        return app
+
+    def test_three_completed_items_switch_to_matching_followups_with_true_item_rates(self):
+        app = self.followup_view()
+        app.render_builds()
+        self.assertIn("Follow-up items", app.build_summary.set.call_args.args[0])
+        app.build_cards[0]["items"][0]["name"].configure.assert_called_with(text="Four")
+        app.build_cards[0]["value"].configure.assert_called_with(text="56.0%")
+        app.build_cards[0]["items"][1]["frame"].pack_forget.assert_called()
+        self.assertIn("LOW SAMPLE", app.build_cards[1]["meta"].configure.call_args.kwargs["text"])
+        self.assertIn("Most played", app.build_order.get())
+        app.build_core_items[0]["name"].configure.assert_called_with(text="1. One")
+        self.assertIn("of this order", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
+
+    def test_boots_components_and_unknown_items_do_not_trigger_followups(self):
+        app = self.followup_view()
+        app.build_data["item_catalog"]["4"]["is_boots"] = True
+        app.build_data["item_catalog"]["5"]["is_final"] = False
+        app.live_items = ["1", "2", "4", "5", "999"]
+        self.assertEqual(app.completed_items(), ["1", "2"])
+        app.render_builds()
+        self.assertIn("Core builds", app.build_summary.set.call_args.args[0])
+
+    def test_owned_and_transformed_followup_items_are_removed_after_purchase(self):
+        app = self.followup_view()
+        app.build_data["item_catalog"]["44"] = {"is_final": True, "canonical_id": "4"}
+        app.render_builds()
+        app.handle_game({"status": "live", "champion_id": "157", "item_ids": ["1", "2", "3", "44"]})
+        app.build_cards[0]["items"][0]["name"].configure.assert_called_with(text="Five")
+        self.assertIn("4 completed", app.build_summary.set.call_args.args[0])
+        app.requests.queue.clear()
+        app.handle_game({"status": "live", "champion_id": "157", "item_ids": ["1", "2", "3"]})
+        app.build_cards[0]["items"][0]["name"].configure.assert_called_with(text="Four")
+        self.assertTrue(app.requests.empty(), "Inventory changes must not refetch champion statistics")
+
+    def test_route_selector_uses_that_routes_rates_and_survives_inventory_update(self):
+        app = self.followup_view()
+        app.render_builds()
+        selected = app.build_order_box.__setitem__.call_args.args[1]
+        app.build_order.set(selected[1])
+        app.render_builds()
+        app.build_core_items[0]["name"].configure.assert_called_with(text="1. Three")
+        app.build_cards[0]["items"][0]["name"].configure.assert_called_with(text="Six")
+        app.build_cards[0]["value"].configure.assert_called_with(text="58.0%")
+        app.handle_game({"status": "live", "champion_id": "157", "item_ids": ["1", "2", "3", "4"]})
+        self.assertEqual(app.build_order.get(), selected[1])
+
+    def test_no_matching_core_and_all_owned_followups_do_not_show_unrelated_rates(self):
+        app = self.followup_view()
+        app.live_items = ["1", "4", "5"]
+        app.render_builds()
+        self.assertIn("No follow-up data matches", app.build_summary.set.call_args.args[0])
+        app.build_cards[0]["frame"].pack.assert_not_called()
+        app.live_items = ["1", "2", "3", "4", "5"]
+        app.render_builds()
+        self.assertIn("No unowned", app.build_summary.set.call_args.args[0])
+        app.build_cards[0]["frame"].pack.assert_not_called()
+
+    def test_missing_inventory_preserves_last_snapshot_but_explicit_empty_clears_it(self):
+        app = self.followup_view()
+        app.handle_game({"status": "live", "champion_id": "157", "item_ids": None})
+        self.assertEqual(app.live_items, ["1", "2", "3"])
+        self.assertIn("last known items", app.build_note.get())
+        app.handle_game({"status": "live", "champion_id": "157", "item_ids": []})
+        self.assertEqual(app.live_items, [])
+        self.assertIn("Core builds", app.build_summary.set.call_args.args[0])
+        app.handle_game({"status": "waiting", "phase": "EndOfGame"})
+        self.assertIsNone(app.live_items)
+        self.assertIsNone(app.inventory_champion)
+
+    def test_transformed_source_core_matches_the_same_canonical_inventory(self):
+        app = self.followup_view()
+        app.build_data["item_catalog"]["11"] = {"is_final": True, "canonical_id": "1"}
+        app.build_data["groups"][0]["rows"][0]["item_ids"] = ["11", "2", "3"]
+        app.render_builds()
+        self.assertIn("Follow-up items", app.build_summary.set.call_args.args[0])
+
+    def test_manual_other_champion_does_not_use_live_inventory(self):
+        app = self.followup_view()
+        app.champion = "41"
+        app.follow = False
+        app.render_builds()
+        self.assertIn("Core builds", app.build_summary.set.call_args.args[0])
 
     def test_delayed_icon_updates_only_slots_still_showing_that_item(self):
         app = self.make_view()

@@ -778,5 +778,150 @@ class StatsProviderTests(unittest.TestCase):
                 self.assertEqual(core["item_names"][0], "Statikk Shiv")
 
 
+
+    def test_follow_up_items_keep_exact_route_rates_names_and_icons(self):
+        detail = copy.deepcopy(ITEM_DETAIL)
+        routes = detail["builds"]["filtered"]["archetypes"][0]["profiles"][0]["routes"]
+        routes[0]["laterItems"] = [
+            {"rank": 2, "item": {"id": 3153}, "sampleCount": 37, "winRate": 0.7297, "pickRate": 0.74},
+            {"rank": 1, "item": {"id": 3003}, "sampleCount": 10, "winRate": 0.8, "pickRate": 0.2},
+        ]
+        routes[1]["laterItems"] = [
+            {"rank": 1, "item": {"id": 3153}, "sampleCount": 400, "winRate": 0.65, "pickRate": 0.7273},
+        ]
+        self.responses[detail_url()] = detail
+        self.responses[resource_url("items")] = {
+            **ITEMS, "3153": {**ITEMS["3153"], "icon": "assets/item/3153-0123456789ab.webp"},
+            "3003": {"name": "Archangel's Staff"},
+        }
+        result = self.provider.item_builds_for(157)
+        routes = result["groups"][0]["rows"][0]["routes"]
+        first = routes[0]["later_items"][0]
+        self.assertEqual(first["item_ids"], ["3153"])
+        self.assertEqual(first["item_names"], ["Blade of the Ruined King"])
+        self.assertEqual(first["item_icon_urls"], [f"{DATA_BASE}/assets/item/3153-0123456789ab.webp"])
+        self.assertEqual((first["rank"], first["sample_count"], first["win_rate"], first["pick_rate"]),
+                         (2, 37, 0.7297, 0.74))
+        self.assertEqual(first["pick_rate_scope"], "purchase_route")
+        self.assertTrue(first["low_sample"])
+        self.assertEqual(routes[0]["later_items"][1]["rank"], 1)
+        self.assertEqual(routes[1]["later_items"][0]["win_rate"], 0.65)
+        self.assertEqual(routes[1]["later_items"][0]["sample_count"], 400)
+
+    def test_missing_and_zero_sample_follow_up_rates_are_not_invented(self):
+        detail = copy.deepcopy(ITEM_DETAIL)
+        routes = detail["builds"]["filtered"]["archetypes"][0]["profiles"][0]["routes"]
+        routes[0]["laterItems"] = [
+            {"item": {"id": 3153}, "sampleCount": 0, "winRate": 0.8},
+            {"item": {"id": 3031}, "sampleCount": 20},
+        ]
+        self.responses[detail_url()] = detail
+        routes = self.provider.item_builds_for(157)["groups"][0]["rows"][0]["routes"]
+        self.assertIsNone(routes[0]["later_items"][0]["win_rate"])
+        self.assertTrue(routes[0]["later_items"][0]["low_sample"])
+        self.assertIsNone(routes[0]["later_items"][1]["win_rate"])
+        self.assertIsNone(routes[0]["later_items"][1]["pick_rate"])
+        self.assertEqual(routes[1]["later_items"], [])
+
+    def test_follow_up_item_invalid_fields_and_duplicates_are_rejected(self):
+        valid = {"item": {"id": 3153}, "sampleCount": 20, "winRate": 0.6, "pickRate": 0.4}
+        cases = [None, {}, [None], [valid, valid]]
+        for key, value in (
+            ("winRate", 1.2), ("winRate", float("nan")), ("winRate", float("inf")),
+            ("pickRate", -0.1), ("sampleCount", True), ("sampleCount", -1),
+            ("sampleCount", 2.5), ("item", None), ("item", {"id": True}),
+            ("item", {"id": "../3153"}), ("item", {"id": 0}), ("item", {"id": 999999}),
+        ):
+            cases.append([{**valid, key: value}])
+        for invalid in cases:
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                detail = copy.deepcopy(ITEM_DETAIL)
+                detail["builds"]["filtered"]["archetypes"][0]["profiles"][0]["routes"][0]["laterItems"] = invalid
+                self.responses[detail_url()] = detail
+                with self.assertRaises(DataUnavailableError):
+                    StatsProvider(Path(directory)).item_builds_for(157)
+
+    def test_item_catalog_classifies_finals_boots_components_and_pure_transforms(self):
+        self.responses[detail_url()] = ITEM_DETAIL
+        self.responses[resource_url("items")] = {
+            **ITEMS,
+            "3003": {"name": "Archangel's Staff", "isFinal": True, "categories": ["Mana"],
+                     "purchasable": True, "acquisition": "shop", "to": ["3040"]},
+            "3040": {"name": "Seraph's Embrace", "isFinal": True, "categories": ["Mana"],
+                     "purchasable": False, "acquisition": "transform", "from": ["3003"]},
+            "3020": {"name": "Sorcerer's Shoes", "isFinal": True, "categories": ["Boots"]},
+            "3070": {"name": "Tear", "isFinal": False, "categories": ["Mana"]},
+            "2003": {"name": "Potion", "isFinal": True, "categories": ["Consumable"]},
+            "3340": {"name": "Trinket", "isFinal": True, "categories": ["Trinket"]},
+            "2051": {"name": "Guardian's Horn", "isFinal": False, "categories": ["Health", "Lane"]},
+            "9990": {"name": "Unknown categories", "isFinal": True},
+        }
+        catalog = self.provider.item_builds_for(157)["item_catalog"]
+        self.assertEqual(catalog["3040"], {
+            "name": "Seraph's Embrace", "is_final": True, "is_boots": False, "canonical_id": "3003",
+        })
+        self.assertEqual(catalog["3003"]["canonical_id"], "3003")
+        self.assertTrue(catalog["3020"]["is_final"])
+        self.assertTrue(catalog["3020"]["is_boots"])
+        for item_id in ("3070", "2003", "3340", "2051", "9990", "3031"):
+            self.assertFalse(catalog[item_id]["is_final"])
+
+    def test_item_catalog_does_not_alias_shop_upgrades_or_unverified_transforms(self):
+        base = {"name": "Base", "isFinal": True, "categories": ["Mana"],
+                "purchasable": True, "acquisition": "shop", "to": ["3040"]}
+        transformed = {"name": "Transform", "isFinal": True, "categories": ["Mana"],
+                       "purchasable": False, "acquisition": "transform", "from": ["3003"]}
+        for base_patch, child_patch in (
+            ({}, {"acquisition": "shop", "purchasable": True}),
+            ({}, {"from": ["3003", "3070"]}),
+            ({}, {"from": ["../3003"]}),
+            ({}, {"from": ["999999"]}),
+            ({"to": []}, {}),
+            ({"to": ["3040", "../bad"]}, {}),
+            ({"isFinal": False}, {}),
+            ({"purchasable": False, "acquisition": "transform"}, {}),
+            ({}, {"categories": ["Boots"]}),
+        ):
+            with self.subTest(base=base_patch, child=child_patch), tempfile.TemporaryDirectory() as directory:
+                self.responses[detail_url()] = ITEM_DETAIL
+                self.responses[resource_url("items")] = {
+                    **ITEMS, "3003": {**base, **base_patch}, "3040": {**transformed, **child_patch},
+                }
+                catalog = StatsProvider(Path(directory)).item_builds_for(157)["item_catalog"]
+                self.assertEqual(catalog["3040"]["canonical_id"], "3040")
+
+    def test_follow_up_rates_and_catalog_fall_back_as_one_snapshot(self):
+        detail = copy.deepcopy(ITEM_DETAIL)
+        detail["builds"]["filtered"]["archetypes"][0]["profiles"][0]["routes"][0]["laterItems"] = [
+            {"item": {"id": 3153}, "sampleCount": 30, "winRate": 0.7, "pickRate": 0.6},
+        ]
+        self.responses[detail_url()] = detail
+        self.responses[resource_url("items")] = {
+            **ITEMS, "3153": {**ITEMS["3153"], "isFinal": True, "categories": ["Damage"]},
+        }
+        first = self.provider.item_builds_for(157)
+        self.next_version()
+        next_detail = copy.deepcopy(detail)
+        next_detail["builds"]["filtered"]["archetypes"][0]["profiles"][0]["routes"][0]["laterItems"][0]["winRate"] = 0.9
+        self.responses[detail_url(NEXT_VERSION)] = next_detail
+        self.responses[resource_url("items", NEXT_VERSION)] = URLError("offline")
+        stale = self.provider.item_builds_for(157)
+        self.assertTrue(stale["stale"])
+        self.assertEqual(stale["groups"], first["groups"])
+        self.assertEqual(stale["item_catalog"], first["item_catalog"])
+        self.assertEqual(stale["version"], "16.21")
+        self.clock.return_value += RETRY_DELAY + 1
+        self.responses[resource_url("items", NEXT_VERSION)] = {
+            **ITEMS, "3153": {"name": "New name", "isFinal": False, "categories": ["Damage"]},
+        }
+        recovered = self.provider.item_builds_for(157)
+        later = recovered["groups"][0]["rows"][0]["routes"][0]["later_items"][0]
+        self.assertFalse(recovered["stale"])
+        self.assertEqual(recovered["version"], "16.22")
+        self.assertEqual(later["win_rate"], 0.9)
+        self.assertEqual(later["item_names"], ["New name"])
+        self.assertFalse(recovered["item_catalog"]["3153"]["is_final"])
+
+
 if __name__ == "__main__":
     unittest.main()

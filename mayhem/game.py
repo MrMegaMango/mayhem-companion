@@ -153,11 +153,38 @@ def _summoner_spells(player: Mapping[str, Any]) -> list[dict[str, Any]]:
         result.append({"id": identifier, "name": name or raw_name, "raw_name": raw_name or None})
     return result
 
+def _inventory_item_ids(player: Mapping[str, Any]) -> list[str] | None:
+    """Return occupied inventory slots 0-5, never an inferred purchase order.
+
+    An explicit empty items list is known empty; missing or malformed data is
+    unknown. Components and consumables remain for catalog classification.
+    Trinket slot 6 is excluded, and stack counts do not create extra slots.
+    """
+    items = player.get("items")
+    if not isinstance(items, list):
+        return None
+    slots = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            return None
+        slot = item.get("slot")
+        if type(slot) is not int or not 0 <= slot <= 6:
+            return None
+        if slot == 6:
+            continue
+        identifier = item.get("itemID")
+        if (type(identifier) is not int or not 0 < identifier <= 2**31 - 1
+                or slot in slots):
+            return None
+        slots[slot] = str(identifier)
+    return [slots[slot] for slot in sorted(slots)]
+
+
 def _state(status: str, message: str) -> dict[str, Any]:
     return {
         "status": status, "champion_id": None, "champion_name": None,
         "raw_champion": None, "level": None, "game_mode": None,
-        "game_time": None, "summoner_spells": [], "message": message,
+        "game_time": None, "summoner_spells": [], "item_ids": None, "message": message,
     }
 
 
@@ -194,6 +221,7 @@ def poll_active_player(timeout: float = 1.0) -> dict[str, Any]:
         result["champion_name"] = champion_name
         result["raw_champion"] = raw_champion or None
         result["summoner_spells"] = _summoner_spells(player)
+        result["item_ids"] = _inventory_item_ids(player)
         level = _finite_number(player.get("level"))
         result["level"] = int(level) if level is not None and 1 <= level <= 30 and level.is_integer() else None
         # Supplementary metadata failing must not discard a valid champion.
