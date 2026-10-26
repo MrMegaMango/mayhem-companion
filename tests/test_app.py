@@ -55,6 +55,10 @@ class StateTests(unittest.TestCase):
         app.spell_token = 7
         app.spell_champion = "157"
         app.spell_data = None
+        app.choice_token = 0
+        app.choice_ids = app.choice_context = None
+        app.choice_active = False
+        app.choice_panel, app.spells_tab, app.spell_toolbar = Mock(), Mock(), Mock()
         app.build_token = 9
         app.build_champion = "157"
         app.build_data = None
@@ -101,6 +105,93 @@ class StateTests(unittest.TestCase):
         app.handle_game({"status": "live", "raw_champion": "game_character_displayname_Yasuo"})
         self.assertEqual(app.champion, "157")
         self.assertFalse(app.worker.provider.mock_calls)
+
+    def test_champion_choice_list_loads_once_and_current_swap_only_changes_highlight(self):
+        app = self.make_view()
+        game = {"status": "champ_select", "is_aram": True, "champion_id": "157",
+                "available_champion_ids": ["157", "63"]}
+        app.update_champion_choices(game)
+        app.update_champion_choices(game)
+        app.update_champion_choices({**game, "available_champion_ids": ["63", "157"], "champion_id": "63"})
+        self.assertEqual(list(app.requests.queue), [("champions", (1, ["157", "63"]))])
+        app.choice_panel.pack.assert_called_once()
+        app.choice_panel.set_loading.assert_called_once()
+        app.choice_panel.set_context.assert_called_with(["157", "63"], "63", app.catalog["champions"], incomplete=False)
+        app.spells_tab.configure.assert_called_with(text="Select")
+
+    def test_rerolled_champion_choices_reject_old_reply_and_error(self):
+        app = self.make_view()
+        game = {"status": "champ_select", "is_aram": True, "champion_id": "157",
+                "available_champion_ids": ["157", "63"]}
+        app.update_champion_choices(game)
+        app.update_champion_choices({**game, "available_champion_ids": ["157", "99"]})
+        app.handle_event("champions", (1, {"rows": [{"champion_id": "63"}]}))
+        app.handle_event("champions_error", (1, "Old error"))
+        app.choice_panel.set_data.assert_not_called()
+        app.choice_panel.set_error.assert_not_called()
+        data = {"rows": [{"champion_id": "99"}]}
+        app.handle_event("champions", (2, data))
+        app.choice_panel.set_data.assert_called_once_with(data)
+
+    def test_unknown_choices_clear_old_list_without_claiming_empty_or_refetching(self):
+        app = self.make_view()
+        game = {"status": "champ_select", "is_aram": True, "champion_id": "157",
+                "available_champion_ids": ["157"]}
+        app.update_champion_choices(game)
+        app.update_champion_choices({**game, "available_champion_ids": None})
+        app.choice_panel.set_context.assert_called_with(None, "157", app.catalog["champions"], incomplete=False)
+        self.assertEqual(app.requests.qsize(), 1)
+        app.handle_event("champions", (1, {"rows": []}))
+        app.choice_panel.set_data.assert_not_called()
+        app.update_champion_choices({**game, "available_champion_ids": []})
+        app.choice_panel.set_context.assert_called_with([], "157", app.catalog["champions"], incomplete=False)
+        self.assertEqual(app.requests.qsize(), 1)
+
+    def test_choice_panel_hides_and_invalidates_data_when_match_starts(self):
+        app = self.make_view()
+        app.update_champion_choices({"status": "champ_select", "is_aram": True,
+                                      "available_champion_ids": ["157"], "champion_id": "157"})
+        app.update_champion_choices({"status": "live", "is_aram": True})
+        app.handle_event("champions", (1, {"rows": []}))
+        app.choice_panel.set_data.assert_not_called()
+        app.choice_panel.pack_forget.assert_called_once()
+        app.spells_tab.configure.assert_called_with(text="Spells")
+        self.assertFalse(app.choice_active)
+        self.assertIsNone(app.choice_ids)
+
+    def test_unknown_or_other_modes_never_load_choice_rates(self):
+        app = self.make_view()
+        game = {"status": "champ_select", "available_champion_ids": ["157"]}
+        for mode in (None, False):
+            app.update_champion_choices({**game, "is_aram": mode})
+        app.display_mode = "tft"
+        app.update_champion_choices({**game, "is_aram": True})
+        self.assertTrue(app.requests.empty())
+        app.choice_panel.pack.assert_not_called()
+
+    def test_manual_browsing_does_not_replace_actual_current_choice_and_retry_is_explicit(self):
+        app = self.make_view()
+        app.follow, app.champion = False, "99"
+        game = {"status": "champ_select", "is_aram": True, "champion_id": "157",
+                "available_champion_ids": ["157", "63"]}
+        app.update_champion_choices(game)
+        app.handle_event("champions_error", (1, "Offline"))
+        app.update_champion_choices(game)
+        self.assertEqual(app.requests.qsize(), 1)
+        app.update_champion_choices(game, force=True)
+        self.assertEqual(app.requests.qsize(), 2)
+        self.assertEqual(app.champion, "99")
+        app.choice_panel.set_context.assert_called_with(["157", "63"], "157", app.catalog["champions"], incomplete=False)
+
+    def test_partial_availability_note_changes_without_refetching_same_champions(self):
+        app = self.make_view()
+        game = {"status": "champ_select", "is_aram": True, "champion_id": "157",
+                "available_champion_ids": ["157"], "availability_incomplete": True}
+        app.update_champion_choices(game)
+        app.choice_panel.set_context.assert_called_with(["157"], "157", app.catalog["champions"], incomplete=True)
+        app.update_champion_choices({**game, "availability_incomplete": False})
+        self.assertEqual(app.requests.qsize(), 1)
+        app.choice_panel.set_context.assert_called_with(["157"], "157", app.catalog["champions"], incomplete=False)
 
     def test_tft_auto_mode_loads_its_own_panel_once_and_stays_on_vertical_placement_path(self):
         app = self.make_view()

@@ -28,6 +28,188 @@ def gameflow(mode="ARAM", queue_id=450, phase="ChampSelect"):
             "teamOne": [{"puuid": "PRIVATE-PUUID"}]}}
 
 
+def choice_session(champion=897, *, phase="FINALIZATION", subset=False, bench=True):
+    data = session(champion)
+    data.update(isSpectating=False, benchEnabled=bench, allowSubsetChampionPicks=subset,
+                timer={"phase": phase}, actions=[[{"actorCellId": 2, "type": "pick",
+                                                 "completed": False, "isInProgress": True}]])
+    return data
+
+
+class AvailableChampionTests(unittest.TestCase):
+    def read_choices(self, data, *, pickable=None, subset=None, is_aram=True):
+        responses = {client._PICKABLE_PATH: pickable, client._SUBSET_PATH: subset}
+        read = MagicMock(side_effect=lambda path: responses[path])
+        return client._session_state(data, is_aram=is_aram, read_options=read), read
+
+    def test_current_and_eligible_bench_only_never_whole_pickable_roster(self):
+        data = choice_session()
+        data["benchChampions"] = [{"championId": 22}, {"championId": 99},
+                                  {"championId": 1}, {"championId": "022"}, {"championId": 897}]
+        result, read = self.read_choices(data, pickable=[897, "22", 1, 157, 555])
+        self.assertEqual(result["available_champion_ids"], ["897", "22"])
+        self.assertEqual(result["available_champion_sources"], {"897": "current", "22": "bench"})
+        self.assertFalse(result["availability_incomplete"])
+        read.assert_called_once_with(client._PICKABLE_PATH)
+        self.assertEqual(result["champion_id"], "897")
+        self.assertEqual(len(result["summoner_spells"]), 2)
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_initial_cards_use_subset_not_full_eligible_roster(self):
+        data = choice_session(0, phase="BAN_PICK", subset=True, bench=False)
+        result, read = self.read_choices(data, pickable=list(range(1, 200)), subset=[22, "099", 157])
+        self.assertEqual(result["available_champion_ids"], ["22", "99", "157"])
+        self.assertEqual(set(result["available_champion_sources"].values()), {"card"})
+        self.assertFalse(result["availability_incomplete"])
+        read.assert_called_once_with(client._SUBSET_PATH)
+
+    def test_bench_is_locked_to_own_subset_during_initial_card_phase(self):
+        data = choice_session(0, phase="BAN_PICK", subset=True)
+        data["benchChampions"] = [{"championId": 22}, {"championId": 99}, {"championId": 157}]
+        result, read = self.read_choices(data, pickable=[22, 99, 157, 555], subset=[22, 99])
+        self.assertEqual(result["available_champion_ids"], ["22", "99"])
+        self.assertEqual(result["available_champion_sources"], {"22": "card", "99": "card"})
+        self.assertFalse(result["availability_incomplete"])
+        self.assertEqual([c.args[0] for c in read.call_args_list], [client._SUBSET_PATH, client._PICKABLE_PATH])
+        data["timer"]["phase"] = "FINALIZATION"
+        result, read = self.read_choices(data, pickable=[22, 99, 157], subset=[])
+        self.assertEqual(result["available_champion_ids"], ["22", "99", "157"])
+        read.assert_called_once_with(client._PICKABLE_PATH)
+
+    def test_completed_or_future_local_pick_does_not_expose_initial_cards(self):
+        for completed, in_progress in ((True, True), (True, False), (False, False)):
+            data = choice_session(897, phase="BAN_PICK", subset=True, bench=False)
+            data["actions"][0][0].update(completed=completed, isInProgress=in_progress)
+            result, read = self.read_choices(data, subset=[22, 99])
+            self.assertEqual(result["available_champion_ids"], ["897"])
+            read.assert_not_called()
+
+    def test_completed_card_pick_can_retake_own_eligible_subset_from_bench(self):
+        data = choice_session(897, phase="BAN_PICK", subset=True)
+        data["actions"][0][0]["completed"] = True
+        data["benchChampions"] = [{"championId": 22}, {"championId": 99}]
+        result, _ = self.read_choices(data, pickable=[22, 99], subset=[897, 22])
+        self.assertEqual(result["available_champion_ids"], ["897", "22"])
+        self.assertEqual(result["available_champion_sources"]["22"], "bench")
+
+    def test_preview_is_not_current_but_verified_card_can_still_appear(self):
+        data = choice_session(0, phase="BAN_PICK", subset=True, bench=False)
+        data["myTeam"][1]["championPickIntent"] = 22
+        result, _ = self.read_choices(data, subset=[99, 157])
+        self.assertEqual(result["champion_id"], "22")
+        self.assertTrue(result["champion_preview"])
+        self.assertEqual(result["available_champion_ids"], ["99", "157"])
+        result, _ = self.read_choices(data, subset=[22, 99])
+        self.assertEqual(result["available_champion_sources"]["22"], "card")
+
+    def test_missing_and_explicitly_empty_choices_are_distinct(self):
+        data = choice_session(0)
+        data["benchChampions"] = []
+        result, read = self.read_choices(data)
+        self.assertEqual(result["available_champion_ids"], [])
+        self.assertFalse(result["availability_incomplete"])
+        read.assert_not_called()
+        del data["benchChampions"]
+        result, read = self.read_choices(data)
+        self.assertIsNone(result["available_champion_ids"])
+        self.assertTrue(result["availability_incomplete"])
+        read.assert_not_called()
+
+    def test_unknown_eligibility_preserves_current_and_marks_partial(self):
+        for response in (None, {}, [True], [22, "PRIVATE"], list(range(1, 1026))):
+            result, _ = self.read_choices(choice_session(), pickable=response)
+            self.assertEqual(result["available_champion_ids"], ["897"])
+            self.assertTrue(result["availability_incomplete"])
+            self.assertNotIn("PRIVATE", json.dumps(result))
+        result, _ = self.read_choices(choice_session(), pickable=[])
+        self.assertEqual(result["available_champion_ids"], ["897"])
+        self.assertFalse(result["availability_incomplete"])
+
+    def test_unknown_subset_never_unlocks_bench_during_initial_phase(self):
+        data = choice_session(897, phase="BAN_PICK", subset=True)
+        for subset in (None, {}, [22, "PRIVATE"], [22, 99, 157, 555]):
+            result, _ = self.read_choices(data, pickable=[22, 99], subset=subset)
+            self.assertEqual(result["available_champion_ids"], ["897"])
+            self.assertTrue(result["availability_incomplete"])
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_malformed_bench_does_not_discard_valid_cards_or_current(self):
+        data = choice_session(897, phase="BAN_PICK", subset=True)
+        for bench in (None, {}, [22], [{"championId": True}], [{"championId": 22}, {}],
+                      [{"championId": 22}] * 51):
+            data["benchChampions"] = bench
+            result, read = self.read_choices(data, pickable=[22], subset=[99, 157])
+            self.assertEqual(result["available_champion_ids"], ["897", "99", "157"])
+            self.assertTrue(result["availability_incomplete"])
+            read.assert_called_once_with(client._SUBSET_PATH)
+
+    def test_unknown_timer_and_missing_flags_preserve_only_confirmed_context(self):
+        data = choice_session()
+        for timer in (None, {}, {"phase": "PRIVATE"}, {"phase": True}, []):
+            data["timer"] = timer
+            result, read = self.read_choices(data, pickable=[22])
+            self.assertEqual(result["available_champion_ids"], ["897"])
+            self.assertTrue(result["availability_incomplete"])
+            read.assert_not_called()
+        for key in ("benchEnabled", "allowSubsetChampionPicks"):
+            data = choice_session(0, phase="BAN_PICK")
+            del data[key]
+            result, _ = self.read_choices(data, pickable=[22], subset=[99])
+            self.assertIsNone(result["available_champion_ids"])
+            self.assertTrue(result["availability_incomplete"])
+
+    def test_irrelevant_timer_phases_and_disabled_bench_do_not_query_options(self):
+        for phase in ("PLANNING", "GAME_STARTING"):
+            result, read = self.read_choices(choice_session(phase=phase, subset=True), pickable=[22], subset=[99])
+            self.assertEqual(result["available_champion_ids"], ["897"])
+            read.assert_not_called()
+        result, read = self.read_choices(choice_session(bench=False), pickable=[22])
+        self.assertEqual(result["available_champion_ids"], ["897"])
+        read.assert_not_called()
+        result, read = self.read_choices(choice_session(phase="BAN_PICK"), pickable=[22])
+        self.assertEqual(result["available_champion_ids"], ["897"])
+        read.assert_not_called()
+
+    def test_spectator_unknown_mode_and_malformed_local_identity_fail_closed(self):
+        for is_aram in (False, None, "true", 1):
+            result, read = self.read_choices(choice_session(), is_aram=is_aram, pickable=[22])
+            self.assertIsNone(result["available_champion_ids"])
+            read.assert_not_called()
+        for field, value in (("isSpectating", True), ("isSpectating", "false"),
+                             ("isSpectating", None), ("localPlayerCellId", "2"),
+                             ("localPlayerCellId", True), ("myTeam", [])):
+            data = choice_session()
+            data[field] = value
+            result, read = self.read_choices(data, pickable=[22])
+            self.assertIsNone(result["available_champion_ids"])
+            self.assertTrue(result["availability_incomplete"])
+            read.assert_not_called()
+
+    def test_missing_or_ambiguous_actions_do_not_infer_initial_cards(self):
+        for actions in (None, {}, [None], [[None]], [[{}]],
+                        [[{"actorCellId": "2", "type": "pick"}]],
+                        [[{"actorCellId": 2, "type": None}]], [[{"actorCellId": 2, "type": "pick"}]],
+                        [[{"actorCellId": 2, "type": "pick", "completed": False,
+                           "isInProgress": True}]] * 2):
+            data = choice_session(0, phase="BAN_PICK", subset=True, bench=False)
+            data["actions"] = actions
+            result, read = self.read_choices(data, subset=[22, 99])
+            self.assertIsNone(result["available_champion_ids"])
+            self.assertTrue(result["availability_incomplete"])
+            read.assert_not_called()
+
+    def test_optional_endpoint_failure_is_sanitized_and_preserves_selection(self):
+        for error in (URLError("PRIVATE-TOKEN"), HTTPError("private", 404, "PRIVATE", {}, None),
+                      ValueError("PRIVATE"), TimeoutError("PRIVATE")):
+            read = MagicMock(side_effect=error)
+            result = client._session_state(choice_session(), is_aram=True, read_options=read)
+            self.assertEqual(result["champion_id"], "897")
+            self.assertEqual(result["available_champion_ids"], ["897"])
+            self.assertTrue(result["availability_incomplete"])
+            self.assertEqual(len(result["summoner_spells"]), 2)
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
+
 class SessionTests(unittest.TestCase):
     def test_matches_own_cell_and_returns_only_champion_and_spell_context(self):
         result = client._session_state(session())
@@ -138,6 +320,28 @@ class ReaderTests(unittest.TestCase):
         result = self.reader.poll()
         self.assertEqual((result["status"], result["phase"]), ("waiting", "Lobby"))
         self.http.assert_called_once()
+
+    def test_unknown_or_other_mode_does_not_read_available_options(self):
+        for metadata in (gameflow("CLASSIC", 420), gameflow(None, 0), URLError("PRIVATE")):
+            self.http.reset_mock()
+            self.http.side_effect = ["ChampSelect", metadata,
+                                     choice_session(phase="BAN_PICK", subset=True)]
+            result = self.reader.poll()
+            self.assertEqual(result["champion_id"], "897")
+            self.assertIsNone(result["available_champion_ids"])
+            self.assertEqual(result["available_champion_sources"], {})
+            self.assertEqual(self.http.call_count, 3)
+
+    def test_availability_clears_on_missing_session_exit_disconnect_and_tft(self):
+        for remaining in (["ChampSelect", gameflow(), HTTPError("private", 404, "private", {}, None)],
+                          ["EndOfGame"], ["None"], ["Lobby"], [URLError("PRIVATE")],
+                          ["ChampSelect", gameflow("TFT", 1100)]):
+            self.http.side_effect = ["ChampSelect", gameflow(), choice_session(), [22], *remaining]
+            self.assertEqual(self.reader.poll()["available_champion_ids"], ["897", "22"])
+            result = self.reader.poll()
+            self.assertIsNone(result["available_champion_ids"])
+            self.assertEqual(result["available_champion_sources"], {})
+            self.assertFalse(result["availability_incomplete"])
 
     def test_changes_trades_bench_swaps_and_empty_selection_replace_previous_data(self):
         self.http.side_effect = ["ChampSelect", gameflow(), session(897), "ChampSelect", gameflow(), session(22),
@@ -387,6 +591,38 @@ class GameflowContextTests(unittest.TestCase):
 
 
 class LockfileAndTransportTests(unittest.TestCase):
+    def test_reader_uses_allowed_gets_and_replaces_choices_without_stale_state(self):
+        first = choice_session(0, phase="BAN_PICK", subset=True)
+        second = choice_session(0, phase="BAN_PICK", subset=True)
+        second["benchChampions"] = [{"championId": 157}]
+        opener = MagicMock()
+        response = opener.open.return_value.__enter__.return_value
+        payloads = ["ChampSelect", gameflow(), first, [22, 99], [22, 99, 555],
+                    "ChampSelect", gameflow(), second, [157, 555], [157, 555],
+                    "ChampSelect", gameflow(), choice_session(), [22, 99],
+                    "GameStart", gameflow(phase="GameStart")]
+        response.read.side_effect = [json.dumps(value).encode("utf-8") for value in payloads]
+        with patch.object(client, "_discover_lockfiles", return_value=[Path("fixture-lockfile")]), \
+                patch.object(client, "_read_lockfile", return_value=client._Credentials(54321, "fixture-token")), \
+                patch.object(client, "_local_opener", return_value=opener):
+            reader = client.ClientReader()
+            states = [reader.poll(timeout=0.25) for _ in range(4)]
+        self.assertEqual([state["available_champion_ids"] for state in states],
+                         [["22", "99"], ["157", "555"], ["897", "22"], None])
+        self.assertEqual(states[2]["available_champion_sources"], {"897": "current", "22": "bench"})
+        self.assertEqual(states[3]["available_champion_sources"], {})
+        self.assertTrue(all(not state["availability_incomplete"] for state in states))
+        paths = [client._PHASE_PATH, client._GAMEFLOW_PATH, client._SESSION_PATH]
+        expected = [*paths, client._SUBSET_PATH, client._PICKABLE_PATH,
+                    *paths, client._SUBSET_PATH, client._PICKABLE_PATH,
+                    *paths, client._PICKABLE_PATH, client._PHASE_PATH, client._GAMEFLOW_PATH]
+        self.assertEqual([call.args[0].full_url for call in opener.open.call_args_list],
+                         ["https://127.0.0.1:54321" + path for path in expected])
+        self.assertTrue(all(call.args[0].get_method() == "GET" and call.kwargs["timeout"] == 0.25
+                            for call in opener.open.call_args_list))
+        self.assertNotIn("PRIVATE", json.dumps(states))
+        self.assertNotIn("fixture-token", json.dumps(states))
+
     def test_lockfile_validation_and_hidden_credential_repr(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "lockfile"

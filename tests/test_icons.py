@@ -67,6 +67,15 @@ class IconLoaderTests(unittest.TestCase):
         loader._download.assert_called_once_with(URL)
         self.assertTrue(output.empty())
 
+    def test_champion_portraits_use_bounded_numeric_asset_path(self):
+        loader, _, _ = self.loader(start=False)
+        valid = "https://data.aramkit.com/assets/champion/157-617df344cd83.webp"
+        self.assertTrue(loader.request(valid))
+        for url in (valid.replace("/157-", "/Yasuo-"), valid + "?redirect=x",
+                    valid.replace("/157-", "/0-"), valid.replace("https:", "http:"),
+                    valid.replace("data.aramkit.com/", "data.aramkit.com.evil.test/")):
+            self.assertFalse(loader.request(url), url)
+
     def test_slow_network_never_blocks_other_requests(self):
         entered, release = threading.Event(), threading.Event()
         def download(url):

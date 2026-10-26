@@ -136,6 +136,65 @@ def _catalog_resource(data: object) -> dict:
     return data
 
 
+def _champion_resources(data: object) -> dict:
+    data = _catalog_resource(data)
+    if any(not row["name"].strip() for row in data.values()):
+        raise DataUnavailableError("ARAMKit champion names are missing")
+    return data
+
+
+def _champion_rankings(data: object) -> dict:
+    """Validate the single aggregate ARAM Mayhem champion dataset."""
+    if not isinstance(data, dict) or not isinstance(data.get("rows"), list):
+        raise DataUnavailableError("Invalid ARAMKit champion rankings")
+    seen = set()
+    for row in data["rows"]:
+        if not isinstance(row, dict):
+            raise DataUnavailableError("Invalid ARAMKit champion ranking row")
+        try:
+            champion_id = _identifier(row.get("id"))
+        except ValueError as error:
+            raise DataUnavailableError("Invalid ARAMKit champion ranking ID") from error
+        if champion_id in seen:
+            raise DataUnavailableError("Duplicate ARAMKit champion ranking")
+        seen.add(champion_id)
+        has_data = row.get("hasData", True)
+        if type(has_data) is not bool:
+            raise DataUnavailableError("Invalid ARAMKit champion data availability")
+        _count(row.get("sampleCount", 0 if not has_data else None))
+        _rate(row.get("winRate"), optional=True)
+    return data
+
+
+def _champion_icon_url(value: object, champion_id: str) -> str | None:
+    """Accept only this champion's content-addressed ARAMKit portrait."""
+    if not isinstance(value, str):
+        return None
+    prefix = f"{DATA_BASE}/"
+    path = value[len(prefix):] if value.startswith(prefix) else value
+    if not re.fullmatch(r"assets/champion/" + re.escape(champion_id) + r"-[0-9a-f]{12}\.webp", path):
+        return None
+    return prefix + path
+
+
+def _named_champion_rates(data: dict, resources: dict) -> dict[str, dict]:
+    observed = {str(row["id"]): row for row in data["rows"]}
+    if any(champion_id not in resources for champion_id in observed):
+        raise DataUnavailableError("ARAMKit champion names do not match the rankings")
+    result = {}
+    for champion_id, resource in resources.items():
+        row = observed.get(champion_id)
+        count = row.get("sampleCount", 0) if row else 0
+        rate = row.get("winRate") if row and row.get("hasData", True) and count else None
+        result[champion_id] = {
+            "champion_id": champion_id, "name": resource["name"],
+            "icon_url": _champion_icon_url(resource.get("icon"), champion_id),
+            "win_rate": float(rate) if rate is not None else None,
+            "sample_count": count, "missing": rate is None, "low_sample": count < 200,
+        }
+    return result
+
+
 def _detail(data: object, champion_id: str) -> dict:
     if not isinstance(data, dict) or not isinstance(data.get("champion"), dict):
         raise DataUnavailableError("Invalid ARAMKit champion response")
@@ -416,7 +475,8 @@ def _named_item_builds(groups: list[dict], resources: dict) -> list[dict]:
 class StatsProvider:
     """Public ARAMKit data with daily discovery and immutable snapshot caching.
 
-    Fetches only catalog resources and requested champions. A stale fallback is
+    Fetches catalog resources, aggregate rankings, and requested champion details.
+    A stale fallback is
     allowed only for transient transport failures, never for malformed responses
     or explicit HTTP denial/not-found responses. Missing champion statistics are
     never replaced with an augment's global win rate.
@@ -432,6 +492,7 @@ class StatsProvider:
         self._details: dict[tuple[str, str], dict] = {}
         self._summoner_fallbacks: dict[tuple[str, str], dict] = {}
         self._item_fallbacks: dict[tuple[str, str], dict] = {}
+        self._champion_snapshots: dict[str, dict] = {}
 
     def _cache_path(self, url: str) -> Path:
         return self.cache_dir / (hashlib.sha256(url.encode()).hexdigest() + ".json")
@@ -521,6 +582,10 @@ class StatsProvider:
         return f"{DATA_BASE}/{version['dataPath']}/stats/{bracket}/champion-details/{champion_id}.json"
 
     @staticmethod
+    def _champion_rankings_url(version: dict, bracket: str) -> str:
+        return f"{DATA_BASE}/{version['dataPath']}/stats/{bracket}/champion-rankings.json"
+
+    @staticmethod
     def _metadata(version: dict, stale: bool) -> dict:
         return {"source": "ARAMKit", "version": version["version"], "data_date": version["dataDate"], "stale": stale}
 
@@ -579,6 +644,84 @@ class StatsProvider:
         if isinstance(slug, str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
             return f"{SITE_BASE}/champions/{quote(slug, safe='')}"
         return f"{SITE_BASE}/champions"
+
+    def _last_champion_rates(self, bracket: str) -> tuple[dict, dict] | None:
+        """Recover rates, names, and portraits from one complete older snapshot."""
+        version = self._read_json(self.cache_dir / f"last-champion-rates-{bracket}.json")
+        try:
+            _version_row(version)
+        except DataUnavailableError:
+            return None
+        rankings = self._cached(self._champion_rankings_url(version, bracket), _champion_rankings)
+        resources = self._cached(self._resource_url(version, "champions"), _champion_resources)
+        if rankings is None or resources is None:
+            return None
+        try:
+            return _named_champion_rates(rankings["data"], resources["data"]), version
+        except DataUnavailableError:
+            return None
+
+    def champion_rates_for(self, champion_ids: object, bracket: str = "all") -> dict:
+        """Return overall Mayhem champion rates in deduplicated requested order.
+
+        A single aggregate ranking file supplies every champion; changing the
+        selection never downloads individual champion details. sample_count is
+        champion appearances, not the total number of distinct matches. The
+        source's all/high brackets remain separate, and missing observations
+        never fall back to another bracket, mode, or an earlier individual row.
+        Names, icons, and rates always belong to the same version snapshot.
+        """
+        if not isinstance(champion_ids, (list, tuple)):
+            raise ValueError("Champion IDs must be a list or tuple")
+        ids = list(dict.fromkeys(_identifier(value) for value in champion_ids))
+        if bracket not in ("all", "high"):
+            raise ValueError("Bracket must be 'all' or 'high'")
+        cached = self._champion_snapshots.get(bracket)
+        if cached is not None and time.time() < cached["until"]:
+            if "error" in cached:
+                raise DataUnavailableError(cached["error"], transient=True)
+            snapshot = cached["snapshot"]
+        else:
+            try:
+                manifest, stale = self._fetch(MANIFEST_URL, _manifest, ttl=MANIFEST_TTL)
+                version = next(row for row in manifest["versions"] if row["version"] == manifest["latest"])
+                rankings, rankings_stale = self._fetch(
+                    self._champion_rankings_url(version, bracket), _champion_rankings,
+                )
+                resources, resources_stale = self._fetch(
+                    self._resource_url(version, "champions"), _champion_resources,
+                )
+                rows = _named_champion_rates(rankings, resources)
+                stale = stale or rankings_stale or resources_stale
+                self._write_json(self.cache_dir / f"last-champion-rates-{bracket}.json", version)
+            except DataUnavailableError as error:
+                previous = self._last_champion_rates(bracket) if error.transient else None
+                if previous is None:
+                    if error.transient:
+                        self._champion_snapshots[bracket] = {
+                            "error": str(error), "until": time.time() + RETRY_DELAY,
+                        }
+                    raise
+                rows, version = previous
+                stale = True
+            snapshot = {
+                **self._metadata(version, stale),
+                "source_url": f"{SITE_BASE}/champions" + ("?dataset=high" if bracket == "high" else ""),
+                "scope": "champion", "game_mode": "ARAM Mayhem", "bracket": bracket,
+                "sample_scope": "champion_appearances", "by_id": rows,
+            }
+            cached_manifest = self._cached(MANIFEST_URL, _manifest)
+            fetched_at = cached_manifest["fetched_at"] if cached_manifest else time.time()
+            self._champion_snapshots[bracket] = {
+                "snapshot": snapshot,
+                "until": time.time() + RETRY_DELAY if stale else fetched_at + MANIFEST_TTL,
+            }
+        rows = [snapshot["by_id"].get(champion_id, {
+            "champion_id": champion_id, "name": f"Champion {champion_id}",
+            "icon_url": None, "win_rate": None, "sample_count": 0,
+            "missing": True, "low_sample": True,
+        }) for champion_id in ids]
+        return copy.deepcopy({**{key: value for key, value in snapshot.items() if key != "by_id"}, "rows": rows})
 
     def champion_detail(self, champion_id: object, bracket: str = "all") -> dict:
         """Return raw champion-specific JSON, falling back only on transport failure."""

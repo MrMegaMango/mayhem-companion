@@ -25,6 +25,7 @@ from .displays import list_displays, select_display, place_panel
 from .tray import TrayIcon
 from .icons import IconLoader
 from .tft_ui import TftPanel
+from .champion_choices import ChampionChoicesPanel
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -84,6 +85,9 @@ class Companion:
         self.spell_token = 0
         self.spell_champion = None
         self.spell_data = None
+        self.choice_token = 0
+        self.choice_ids = self.choice_context = None
+        self.choice_active = False
         self.build_token = 0
         self.build_champion = None
         self.build_data = None
@@ -348,7 +352,7 @@ class Companion:
         self.champ_var.set(self.catalog["champions"][self.champion]["name"]
                            if self.champion and self.catalog else "Auto detect champion")
         active = self.game_live or self.champ_select
-        self.badge.configure(text="CHAMP SELECT" if self.champ_select else "LIVE" if self.game_live else "WAITING",
+        self.badge.configure(text="SELECT" if self.champ_select else "LIVE" if self.game_live else "WAITING",
                              fg=ACCENT if active else MUTED)
         if self.champ_select:
             self.switch_view("spells", automatic=True)
@@ -381,7 +385,11 @@ class Companion:
 
     def build_spells(self, style):
         self.spell_panel = tk.Frame(self.pages, bg=BG)
+        self.choice_panel = ChampionChoicesPanel(
+            self.spell_panel, request_icon=self.request_tft_icon,
+            on_resize=lambda: self.root.after_idle(self.fit_window))
         toolbar = tk.Frame(self.spell_panel, bg=BG)
+        self.spell_toolbar = toolbar
         toolbar.pack(fill="x", pady=(0, 8))
         self.label(toolbar, "Spell pairs", 10, TEXT, True).pack(side="left")
         self.spell_sort = tk.StringVar(value="Win rate")
@@ -414,6 +422,41 @@ class Companion:
         self.spell_note = tk.StringVar(value="")
         self.label(self.spell_panel, size=8, color=MUTED, textvariable=self.spell_note,
                    anchor="w").pack(fill="x", pady=(7, 0))
+
+    def update_champion_choices(self, game, *, force=False):
+        active = (self.display_mode == "aram" and game.get("status") == "champ_select"
+                  and game.get("is_aram") is True)
+        if not active:
+            if self.choice_active:
+                self.choice_active = False
+                self.choice_token += 1
+                self.choice_ids = self.choice_context = None
+                self.choice_panel.set_context(None, None, {})
+                self.choice_panel.pack_forget()
+                self.spells_tab.configure(text="Spells")
+                self.root.after_idle(self.fit_window)
+            return
+        if not self.choice_active:
+            self.choice_active = True
+            self.choice_panel.pack(fill="x", before=self.spell_toolbar, pady=(0, 12))
+            self.spells_tab.configure(text="Select")
+            self.root.after_idle(self.fit_window)
+        available = game.get("available_champion_ids")
+        ids = tuple(sorted(set(available))) if isinstance(available, list) else None
+        current = game.get("champion_id") if not game.get("champion_preview") else None
+        names = self.catalog.get("champions", {}) if self.catalog else {}
+        incomplete = bool(game.get("availability_incomplete"))
+        context = (ids, current, incomplete)
+        if context != self.choice_context or force:
+            self.choice_context = context
+            self.choice_panel.set_context(list(ids) if ids is not None else None, current, names,
+                                          incomplete=incomplete)
+        if ids != self.choice_ids or force:
+            self.choice_token += 1
+            self.choice_ids = ids
+            if ids:
+                self.choice_panel.set_loading()
+                self.requests.put(("champions", (self.choice_token, list(ids))))
 
     def build_items(self):
         self.build_panel = tk.Frame(self.pages, bg=BG)
@@ -929,6 +972,7 @@ class Companion:
                 if item["icon_url"] == url:
                     item["icon"].configure(image=photo)
             self.tft_panel.on_icon(url, photo)
+            self.choice_panel.on_icon(url, photo)
         elif kind == "tray_action":
             if payload == "show":
                 self.show_from_tray()
@@ -958,8 +1002,17 @@ class Companion:
             self.status.set("Waiting for champion select. You can also browse a champion.")
             self.lookup_spells(force=True)
             self.lookup_builds(force=True)
+            self.update_champion_choices(self.last_game_context, force=True)
         elif kind == "game":
             self.handle_game(payload)
+        elif kind == "champions":
+            token, data = payload
+            if self.choice_active and token == self.choice_token:
+                self.choice_panel.set_data(data)
+        elif kind == "champions_error":
+            token, error = payload
+            if self.choice_active and token == self.choice_token:
+                self.choice_panel.set_error(str(error)[:180])
         elif kind == "tft":
             token, data = payload
             if token == self.tft_token:
@@ -1062,6 +1115,7 @@ class Companion:
                 self.set_game_mode("tft")
             elif game.get("is_aram") is True or game.get("is_tft") is False:
                 self.set_game_mode("aram")
+        self.update_champion_choices(game)
         if self.display_mode == "tft":
             if game.get("status") == "tft" and self.game_status != "tft":
                 self.load_tft()

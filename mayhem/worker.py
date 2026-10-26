@@ -26,6 +26,9 @@ class Worker(threading.Thread):
         self.cache = cache
         self.tft_requests = queue.Queue()
         self.tft_thread = None
+        self.champion_provider = None
+        self.champion_requests = queue.Queue(maxsize=1)
+        self.champion_thread = None
         self.catalog = None
         self.capture = CaptureReader()
         self.client = ClientReader()
@@ -81,6 +84,45 @@ class Worker(threading.Thread):
         if self.tft_thread is None:
             self.tft_thread = threading.Thread(target=self.run_tft_data, name="mayhem-tft-data", daemon=True)
             self.tft_thread.start()
+
+    def perform_champion_task(self, payload):
+        token, champion_ids = payload
+        try:
+            # A separate provider owns its mutable in-memory cache. Disk cache
+            # writes are atomic and can be shared with the ARAM lookup worker.
+            if self.champion_provider is None:
+                self.champion_provider = StatsProvider(self.cache)
+            data = self.champion_provider.champion_rates_for(champion_ids)
+            self.emit("champions", (token, data))
+        except Exception as exc:
+            self.emit("champions_error", (token, str(exc)))
+
+    def run_champion_data(self):
+        while not self.stop.is_set():
+            try:
+                payload = self.champion_requests.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                if not self.stop.is_set():
+                    self.perform_champion_task(payload)
+            finally:
+                self.champion_requests.task_done()
+
+    def queue_champion_task(self, payload):
+        # Bench updates can arrive during a slow fetch. Only the newest waiting
+        # choice list matters; the UI also rejects replies to obsolete tokens.
+        try:
+            self.champion_requests.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            self.champion_requests.task_done()
+        self.champion_requests.put_nowait(payload)
+        if self.champion_thread is None:
+            self.champion_thread = threading.Thread(target=self.run_champion_data,
+                                                    name="mayhem-champion-data", daemon=True)
+            self.champion_thread.start()
 
     def poll_game(self):
         # The lobby exposes the champion while spells can still be changed.
@@ -158,6 +200,8 @@ class Worker(threading.Thread):
                             self.emit("builds_error", (token, str(exc)))
                     elif task in ("tft", "tft_items"):
                         self.queue_tft_task(task, payload)
+                    elif task == "champions":
+                        self.queue_champion_task(payload)
             except queue.Empty:
                 pass
             except Exception as exc:

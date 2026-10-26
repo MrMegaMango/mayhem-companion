@@ -5,8 +5,9 @@ The client supplies the schema through ``/help?format=Full``: a session's
 ``championPickIntent``, and ``spell1Id``/``spell2Id`` are numeric IDs. The LCU
 is an unsupported Riot interface, so missing or changed data fails closed.
 
-Only three GET endpoints are used at runtime. Lockfile authentication remains in
-memory for the current poll; no credentials, player identifiers, or rosters
+Only five GET endpoints are allowed at runtime. Two small champion-ID resources
+are read only when ARAM champion cards or bench choices need them. Authentication
+remains in memory for the current poll; no credentials, player identifiers, or rosters
 are returned or logged. A pick intent is a preview, not a confirmed champion.
 """
 from __future__ import annotations
@@ -30,7 +31,10 @@ from .game import _NoRedirect, _SPELLS_BY_RAW_ID, _state
 _PHASE_PATH = "/lol-gameflow/v1/gameflow-phase"
 _GAMEFLOW_PATH = "/lol-gameflow/v1/session"
 _SESSION_PATH = "/lol-champ-select/v1/session"
-_ALLOWED_PATHS = frozenset((_PHASE_PATH, _GAMEFLOW_PATH, _SESSION_PATH))
+_PICKABLE_PATH = "/lol-champ-select/v1/pickable-champion-ids"
+_SUBSET_PATH = "/lol-lobby-team-builder/champ-select/v1/subset-champion-list"
+_ALLOWED_PATHS = frozenset((_PHASE_PATH, _GAMEFLOW_PATH, _SESSION_PATH,
+                          _PICKABLE_PATH, _SUBSET_PATH))
 _ACTIVE_PHASES = frozenset(("ChampSelect", "GameStart", "InProgress", "Reconnect"))
 _KNOWN_PHASES = frozenset((
     "None", "Lobby", "Matchmaking", "ReadyCheck", "ChampSelect", "GameStart",
@@ -190,7 +194,9 @@ def _get_json(opener, credentials: _Credentials, path: str, timeout: float) -> A
 def _client_state(status: str, message: str, phase: str | None = None) -> dict[str, Any]:
     result = _state(status, message)
     result.update(phase=phase if phase in _KNOWN_PHASES else None,
-                  champion_preview=False, is_aram=None, is_tft=None)
+                  champion_preview=False, is_aram=None, is_tft=None,
+                  available_champion_ids=None, available_champion_sources={},
+                  availability_incomplete=False)
     return result
 
 
@@ -206,20 +212,163 @@ def _positive_id(value: Any) -> str | None:
     return None
 
 
-def _session_state(session: Any) -> dict[str, Any]:
-    result = _client_state("champ_select", "Waiting for your champion selection.", "ChampSelect")
+def _local_player(session: Any) -> Mapping | None:
     if not isinstance(session, Mapping) or session.get("isSpectating") is True:
-        return result
+        return None
     local_cell = session.get("localPlayerCellId")
     team = session.get("myTeam")
     if (isinstance(local_cell, bool) or not isinstance(local_cell, int)
             or local_cell < 0 or not isinstance(team, list)):
-        return result
+        return None
     matches = [player for player in team if isinstance(player, Mapping)
                and type(player.get("cellId")) is int and player["cellId"] == local_cell]
     if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _champion_ids(values: Any, limit: int, *, bench: bool = False) -> list[str] | None:
+    """Normalize a bounded ID list atomically; malformed data is not an empty list."""
+    if not isinstance(values, list) or len(values) > limit:
+        return None
+    result = []
+    for value in values:
+        if bench:
+            if not isinstance(value, Mapping):
+                return None
+            value = value.get("championId")
+        identifier = _positive_id(value)
+        if identifier is None:
+            return None
+        if identifier not in result:
+            result.append(identifier)
+    return result
+
+
+def _local_pick_open(session: Mapping) -> bool | None:
+    """Cards can be chosen only while the local player's pick action is open."""
+    actions = session.get("actions")
+    if not isinstance(actions, list) or len(actions) > 100:
+        return None
+    own = []
+    for group in actions:
+        if not isinstance(group, list) or len(group) > 100:
+            return None
+        for action in group:
+            if (not isinstance(action, Mapping) or type(action.get("actorCellId")) is not int
+                    or not isinstance(action.get("type"), str)):
+                return None
+            if (type(action.get("actorCellId")) is int
+                    and action["actorCellId"] == session["localPlayerCellId"]
+                    and action.get("type") == "pick"):
+                own.append(action)
+    if not own:
+        return False
+    if len(own) != 1:
+        return None
+    action = own[0]
+    if action.get("completed") is True:
+        return False
+    if action.get("completed") is False and type(action.get("isInProgress")) is bool:
+        return action["isInProgress"]
+    return None
+
+
+def _available_champion_state(session: Any, is_aram: Any, read_options=None) -> dict[str, Any]:
+    """Expose direct ARAM choices, never the full eligible/owned champion pool.
+
+    The current local /help schema supplies these fields and both ID endpoints.
+    Riot's 16.21 champ-select frontend uses subsetChampionIds for initial cards
+    and pickableChampionSet for bench canPlay. During BAN_PICK, bench choices
+    outside the subset are locked; the normal bench opens in FINALIZATION.
+    Temporary client-side swap animation cooldowns are not selection advice.
+    """
+    result = {"available_champion_ids": None, "available_champion_sources": {},
+              "availability_incomplete": is_aram is True}
+    if (is_aram is not True or not isinstance(session, Mapping)
+            or session.get("isSpectating") is not False):
         return result
-    player = matches[0]
+    player = _local_player(session)
+    if player is None:
+        return result
+    ids, sources = [], {}
+    raw_current = player.get("championId")
+    current = _positive_id(raw_current)
+    no_current = (type(raw_current) is int and raw_current == 0) or raw_current == "0"
+    incomplete = current is None and not no_current
+
+    def add(identifier, source):
+        if identifier not in sources:
+            ids.append(identifier)
+            sources[identifier] = source
+
+    def finish():
+        result.update(available_champion_ids=ids if ids or not incomplete else None,
+                      available_champion_sources=sources, availability_incomplete=incomplete)
+        return result
+
+    def read_ids(path, limit):
+        if read_options is None:
+            return None
+        try:
+            return _champion_ids(read_options(path), limit)
+        except (HTTPError, URLError, OSError, ValueError, TypeError, UnicodeError):
+            return None
+
+    if current is not None:
+        add(current, "current")
+    timer = session.get("timer")
+    phase = timer.get("phase") if isinstance(timer, Mapping) else None
+    if phase not in ("PLANNING", "BAN_PICK", "FINALIZATION", "GAME_STARTING"):
+        incomplete = True
+        return finish()
+    # These flags distinguish actual cards/bench from the account's pickable
+    # roster. Missing flags never enable a larger list as a fallback.
+    bench_enabled = session.get("benchEnabled")
+    subset_enabled = session.get("allowSubsetChampionPicks")
+    if type(bench_enabled) is not bool or type(subset_enabled) is not bool:
+        incomplete = True
+    if phase in ("PLANNING", "GAME_STARTING"):
+        return finish()
+    card_open = _local_pick_open(session) if subset_enabled is True and phase == "BAN_PICK" else False
+    if card_open is None:
+        incomplete = True
+    bench_visible = bench_enabled is True and (phase == "FINALIZATION"
+                                               or subset_enabled is True and phase == "BAN_PICK")
+    bench_ids = _champion_ids(session.get("benchChampions"), 50, bench=True) if bench_visible else []
+    if bench_ids is None:
+        incomplete = True
+        bench_ids = []
+    subset = None
+    if phase == "BAN_PICK" and subset_enabled is True and (card_open is True or bench_ids):
+        # The current client exposes at most three initial champion cards.
+        subset = read_ids(_SUBSET_PATH, 3)
+        if subset is None:
+            incomplete = True
+    held_by_others = {_positive_id(member.get("championId")) for member in session["myTeam"]
+                      if isinstance(member, Mapping) and member is not player}
+    if card_open is True and subset is not None:
+        for identifier in subset:
+            if identifier not in held_by_others:
+                add(identifier, "card")
+    if bench_ids:
+        pickable = read_ids(_PICKABLE_PATH, 1024)
+        if pickable is None:
+            incomplete = True
+        else:
+            for identifier in bench_ids:
+                if (identifier in pickable and identifier not in held_by_others
+                        and (phase == "FINALIZATION" or subset is not None and identifier in subset)):
+                    add(identifier, "bench")
+    return finish()
+
+
+def _session_state(session: Any, *, is_aram=None, read_options=None) -> dict[str, Any]:
+    result = _client_state("champ_select", "Waiting for your champion selection.", "ChampSelect")
+    result.update(_available_champion_state(session, is_aram, read_options))
+    player = _local_player(session)
+    if player is None:
+        return result
     raw_champion = player.get("championId")
     champion = _positive_id(raw_champion)
     no_selection = (raw_champion is None or raw_champion == "0"
@@ -310,7 +459,9 @@ class ClientReader:
                 return finish(_client_state("tft", "TFT session detected.", phase))
             if phase != "ChampSelect":
                 return finish(_client_state("waiting", "League game active.", phase))
-            return finish(_session_state(_get_json(self._opener, credentials, _SESSION_PATH, timeout)))
+            session = _get_json(self._opener, credentials, _SESSION_PATH, timeout)
+            return finish(_session_state(session, is_aram=context["is_aram"],
+                          read_options=lambda path: _get_json(self._opener, credentials, path, timeout)))
         except HTTPError as error:
             if error.code in (401, 403):
                 self._needs_discovery = True

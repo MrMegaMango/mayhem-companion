@@ -1,4 +1,5 @@
 import queue
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -232,6 +233,66 @@ class SpellWorkerTests(unittest.TestCase):
             worker.run()
         capture.return_value.scan.assert_not_called()
         self.assertFalse(worker.last_game["is_aram"])
+
+
+class ChampionDataTests(unittest.TestCase):
+    def test_champion_request_is_lazy_and_does_not_fetch_on_polling_thread(self):
+        events, requests, stop = queue.Queue(), queue.Queue(), Mock()
+        stop.wait.side_effect = [False, True]
+        requests.put(("champions", (7, ["157", "63"])))
+        with patch("mayhem.worker.StatsProvider") as provider, \
+                patch("mayhem.worker.ClientReader") as client, \
+                patch("mayhem.worker.threading.Thread") as thread:
+            client.return_value.poll.return_value = {"status": "champ_select", "is_aram": True}
+            worker = Worker(events, requests, stop, ".")
+            worker.run()
+            provider.assert_called_once()
+            provider.return_value.champion_rates_for.assert_not_called()
+            thread.return_value.start.assert_called_once()
+            self.assertEqual(worker.champion_requests.get_nowait(), (7, ["157", "63"]))
+            self.assertTrue(any(kind == "game" for kind, _ in events.queue))
+
+    def test_slow_fetch_coalesces_pending_choices_on_its_own_thread(self):
+        events, stop = queue.Queue(), threading.Event()
+        entered, release = threading.Event(), threading.Event()
+        separate_provider = Mock()
+        calls = []
+
+        def rates(ids):
+            calls.append(ids)
+            if len(calls) == 1:
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError("Test fetch was not released")
+            return {"rows": [{"champion_id": ident} for ident in ids]}
+
+        separate_provider.champion_rates_for.side_effect = rates
+        with patch("mayhem.worker.StatsProvider", side_effect=[Mock(), separate_provider]), \
+                patch("mayhem.worker.ClientReader"):
+            worker = Worker(events, queue.Queue(), stop, ".")
+            try:
+                worker.queue_champion_task((1, ["157"]))
+                self.assertTrue(entered.wait(2))
+                worker.queue_champion_task((2, ["63"]))
+                worker.queue_champion_task((3, ["99"]))
+                self.assertIsNot(worker.champion_provider, worker.provider)
+                release.set()
+                self.assertEqual(events.get(timeout=2)[1][0], 1)
+                self.assertEqual(events.get(timeout=2)[1][0], 3)
+                self.assertEqual(calls, [["157"], ["99"]])
+            finally:
+                release.set()
+                stop.set()
+                worker.champion_thread.join(3)
+                self.assertFalse(worker.champion_thread.is_alive())
+
+    def test_champion_data_failure_preserves_request_token(self):
+        with patch("mayhem.worker.StatsProvider") as provider, patch("mayhem.worker.ClientReader"):
+            events = queue.Queue()
+            worker = Worker(events, queue.Queue(), Mock(), ".")
+            provider.return_value.champion_rates_for.side_effect = ValueError("Unavailable")
+            worker.perform_champion_task((4, ["157"]))
+        self.assertEqual(events.get_nowait(), ("champions_error", (4, "Unavailable")))
 
 
 class OfferExpiryTests(unittest.TestCase):
