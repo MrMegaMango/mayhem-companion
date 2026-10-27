@@ -408,7 +408,7 @@ class Companion:
         table = tk.Frame(self.spell_panel, bg=BG)
         table.pack(fill="both", expand=True)
         self.spell_tree = ttk.Treeview(table, columns=("pair", "win", "games", "pick"),
-                                      show="headings", height=7, style="Spells.Treeview", selectmode="none")
+                                      show="headings", height=1, style="Spells.Treeview", selectmode="none")
         for key, title, width in [("pair", "PAIR", 160), ("win", "WIN %", 67),
                                   ("games", "GAMES", 75), ("pick", "PICK %", 65)]:
             self.spell_tree.heading(key, text=title)
@@ -446,7 +446,7 @@ class Companion:
         current = game.get("champion_id") if not game.get("champion_preview") else None
         names = self.catalog.get("champions", {}) if self.catalog else {}
         incomplete = bool(game.get("availability_incomplete"))
-        context = (ids, current, incomplete)
+        context = (ids, current, incomplete, id(self.catalog))
         if context != self.choice_context or force:
             self.choice_context = context
             self.choice_panel.set_context(list(ids) if ids is not None else None, current, names,
@@ -758,6 +758,8 @@ class Companion:
         self.spell_tree.delete(*self.spell_tree.get_children())
         self.update_spell_status()
         if self.spell_data is None:
+            self.spell_tree.configure(height=1)
+            self.root.after_idle(self.fit_window)
             return
         rows = list(self.spell_data["rows"])
         self.spell_tree.configure(height=max(1, min(len(rows), 8)))
@@ -990,6 +992,7 @@ class Companion:
         elif kind in ("tray_status", "hotkeys_failed"):
             self.check_recovery()
         elif kind == "catalog":
+            refreshing = self.catalog is not None
             self.catalog = payload
             self.champion_names = sorted(x["name"] for x in payload["champions"].values())
             self.augment_names = sorted(x["name"] for x in payload["augments"].values())
@@ -1000,9 +1003,15 @@ class Companion:
             marker = " · cached/offline" if payload.get("stale") else ""
             self.source.set(f"ARAMKit · {payload.get('version', '')} · {payload.get('data_date', '')}{marker}")
             self.status.set("Waiting for champion select. You can also browse a champion.")
-            self.lookup_spells(force=True)
-            self.lookup_builds(force=True)
-            self.update_champion_choices(self.last_game_context, force=True)
+            # Selection can arrive before the public catalog finishes.
+            previous_spell_token, previous_build_token = self.spell_token, self.build_token
+            if self.last_game_context:
+                self.handle_game(self.last_game_context)
+            if refreshing or self.spell_token == previous_spell_token:
+                self.lookup_spells(force=True)
+            if refreshing or self.build_token == previous_build_token:
+                self.lookup_builds(force=True)
+            self.update_champion_choices(self.last_game_context, force=refreshing)
         elif kind == "game":
             self.handle_game(payload)
         elif kind == "champions":

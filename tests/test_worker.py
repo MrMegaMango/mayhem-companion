@@ -8,6 +8,14 @@ from mayhem.worker import Worker
 
 class SpellWorkerTests(unittest.TestCase):
     def setUp(self):
+        # These tests focus on results; test_worker_latency covers real threads.
+        dispatch = patch.object(Worker, "queue_aram_task", autospec=True,
+                                side_effect=lambda worker, task, payload: worker.perform_aram_task(task, payload))
+        dispatch.start()
+        self.addCleanup(dispatch.stop)
+        warmup = patch.object(Worker, "prewarm_champions")
+        warmup.start()
+        self.addCleanup(warmup.stop)
         patcher = patch("mayhem.worker.ClientReader")
         self.client = patcher.start().return_value
         self.client.poll.return_value = {"status": "waiting"}
@@ -242,6 +250,8 @@ class ChampionDataTests(unittest.TestCase):
         requests.put(("champions", (7, ["157", "63"])))
         with patch("mayhem.worker.StatsProvider") as provider, \
                 patch("mayhem.worker.ClientReader") as client, \
+                patch.object(Worker, "queue_aram_task"), \
+                patch.object(Worker, "prewarm_champions"), \
                 patch("mayhem.worker.threading.Thread") as thread:
             client.return_value.poll.return_value = {"status": "champ_select", "is_aram": True}
             worker = Worker(events, requests, stop, ".")
@@ -296,6 +306,15 @@ class ChampionDataTests(unittest.TestCase):
 
 
 class OfferExpiryTests(unittest.TestCase):
+    def setUp(self):
+        dispatch = patch.object(Worker, "queue_aram_task", autospec=True,
+                                side_effect=lambda worker, task, payload: worker.perform_aram_task(task, payload))
+        dispatch.start()
+        self.addCleanup(dispatch.stop)
+        warmup = patch.object(Worker, "prewarm_champions")
+        warmup.start()
+        self.addCleanup(warmup.stop)
+
     @staticmethod
     def ok(offers=()):
         return {"status": "ok", "lines": [{"id": ident} for ident in offers]}

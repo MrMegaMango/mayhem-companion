@@ -76,13 +76,43 @@ class AvailableChampionTests(unittest.TestCase):
         self.assertEqual(result["available_champion_ids"], ["22", "99", "157"])
         read.assert_called_once_with(client._PICKABLE_PATH)
 
-    def test_completed_or_future_local_pick_does_not_expose_initial_cards(self):
-        for completed, in_progress in ((True, True), (True, False), (False, False)):
-            data = choice_session(897, phase="BAN_PICK", subset=True, bench=False)
+    def test_completed_local_pick_does_not_expose_initial_cards(self):
+        for completed, in_progress in ((True, True), (True, False)):
+            data = choice_session(0, phase="BAN_PICK", subset=True, bench=False)
             data["actions"][0][0].update(completed=completed, isInProgress=in_progress)
+            result, read = self.read_choices(data, subset=[22, 99])
+            self.assertEqual(result["available_champion_ids"], [])
+            read.assert_not_called()
+
+    def test_assigned_cards_are_available_during_planning_and_before_pick_active(self):
+        for phase in ("PLANNING", "BAN_PICK"):
+            for in_progress in (False, True):
+                data = choice_session(0, phase=phase, subset=True, bench=False)
+                data["actions"][0][0]["isInProgress"] = in_progress
+                result, read = self.read_choices(data, subset=[22, "099", 157], pickable=list(range(1, 200)))
+                self.assertEqual(result["available_champion_ids"], ["22", "99", "157"])
+                self.assertEqual(set(result["available_champion_sources"].values()), {"card"})
+                self.assertFalse(result["availability_incomplete"])
+                read.assert_called_once_with(client._SUBSET_PATH)
+
+    def test_confirmed_champion_does_not_reopen_initial_cards(self):
+        for phase in ("PLANNING", "BAN_PICK"):
+            data = choice_session(897, phase=phase, subset=True, bench=False)
             result, read = self.read_choices(data, subset=[22, 99])
             self.assertEqual(result["available_champion_ids"], ["897"])
             read.assert_not_called()
+
+    def test_planning_cards_do_not_enable_bench_or_infer_missing_subset(self):
+        data = choice_session(0, phase="PLANNING", subset=True)
+        data["actions"][0][0]["isInProgress"] = False
+        result, read = self.read_choices(data, subset=[99, 157], pickable=[22, 99, 157])
+        self.assertEqual(result["available_champion_ids"], ["99", "157"])
+        read.assert_called_once_with(client._SUBSET_PATH)
+        for subset in (None, {}, [99, True], [22, 99, 157, 555]):
+            result, read = self.read_choices(data, subset=subset, pickable=[22, 99, 157])
+            self.assertIsNone(result["available_champion_ids"])
+            self.assertTrue(result["availability_incomplete"])
+            read.assert_called_once_with(client._SUBSET_PATH)
 
     def test_completed_card_pick_can_retake_own_eligible_subset_from_bench(self):
         data = choice_session(897, phase="BAN_PICK", subset=True)
@@ -133,13 +163,13 @@ class AvailableChampionTests(unittest.TestCase):
             self.assertTrue(result["availability_incomplete"])
             self.assertNotIn("PRIVATE", json.dumps(result))
 
-    def test_malformed_bench_does_not_discard_valid_cards_or_current(self):
-        data = choice_session(897, phase="BAN_PICK", subset=True)
+    def test_malformed_bench_does_not_discard_valid_cards(self):
+        data = choice_session(0, phase="BAN_PICK", subset=True)
         for bench in (None, {}, [22], [{"championId": True}], [{"championId": 22}, {}],
                       [{"championId": 22}] * 51):
             data["benchChampions"] = bench
             result, read = self.read_choices(data, pickable=[22], subset=[99, 157])
-            self.assertEqual(result["available_champion_ids"], ["897", "99", "157"])
+            self.assertEqual(result["available_champion_ids"], ["99", "157"])
             self.assertTrue(result["availability_incomplete"])
             read.assert_called_once_with(client._SUBSET_PATH)
 
@@ -321,6 +351,59 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual((result["status"], result["phase"]), ("waiting", "Lobby"))
         self.http.assert_called_once()
 
+    def test_default_install_avoids_process_discovery_on_first_poll(self):
+        self.http.return_value = "Lobby"
+        result = self.reader.poll()
+        self.assertEqual(result["phase"], "Lobby")
+        self.lockfile.assert_called_once_with(client._DEFAULT_LOCKFILE)
+        self.discovery.assert_not_called()
+
+    def test_missing_default_discovers_alternate_install_then_reuses_it(self):
+        alternate = Path("fixture-lockfile")
+        self.lockfile.side_effect = lambda path: (client._Credentials(54322, "fixture-token")
+                                                  if path == alternate else None)
+        self.http.return_value = "Lobby"
+        self.reader.poll()
+        self.reader.poll()
+        self.discovery.assert_called_once()
+        self.assertEqual([call.args[0] for call in self.lockfile.call_args_list],
+                         [client._DEFAULT_LOCKFILE, alternate, alternate])
+
+    def test_connection_failure_rediscovers_despite_valid_orphaned_lockfile(self):
+        alternate = Path("fixture-lockfile")
+        self.lockfile.side_effect = lambda path: client._Credentials(
+            54322 if path == alternate else 54321, "fixture-token")
+        self.http.side_effect = [URLError("PRIVATE"), "Lobby"]
+        with patch.object(client.time, "monotonic", side_effect=[0, 1]):
+            self.reader.poll()
+            self.reader.poll()
+        self.discovery.assert_called_once()
+        self.assertEqual([call.args[1].port for call in self.http.call_args_list], [54321, 54322])
+
+    def test_disappearing_known_lockfile_triggers_install_discovery(self):
+        self.http.return_value = "Lobby"
+        self.reader.poll()
+        alternate = Path("fixture-lockfile")
+        self.lockfile.side_effect = lambda path: (client._Credentials(54322, "fixture-token")
+                                                  if path == alternate else None)
+        result = self.reader.poll()
+        self.assertEqual(result["phase"], "Lobby")
+        self.assertEqual(self.http.call_args.args[1].port, 54322)
+        self.discovery.assert_called_once()
+
+    def test_early_cards_never_carry_over_across_sessions_or_failed_reads(self):
+        first = choice_session(0, phase="PLANNING", subset=True, bench=False)
+        first["actions"][0][0]["isInProgress"] = False
+        self.http.side_effect = ["ChampSelect", gameflow(), first, [22, 99], "Lobby",
+                                 "ChampSelect", gameflow(), first, URLError("PRIVATE"),
+                                 "ChampSelect", gameflow(), first, [157, 555]]
+        states = [self.reader.poll() for _ in range(4)]
+        self.assertEqual([state["available_champion_ids"] for state in states],
+                         [["22", "99"], None, None, ["157", "555"]])
+        self.assertTrue(states[2]["availability_incomplete"])
+        self.assertEqual(states[2]["available_champion_sources"], {})
+        self.assertNotIn("PRIVATE", json.dumps(states))
+
     def test_unknown_or_other_mode_does_not_read_available_options(self):
         for metadata in (gameflow("CLASSIC", 420), gameflow(None, 0), URLError("PRIVATE")):
             self.http.reset_mock()
@@ -349,7 +432,7 @@ class ReaderTests(unittest.TestCase):
         results = [self.reader.poll() for _ in range(4)]
         self.assertEqual([s["champion_id"] for s in results], ["897", "22", None, "1"])
         self.assertEqual(results[-1]["summoner_spells"][0]["id"], "7")
-        self.discovery.assert_called_once()
+        self.discovery.assert_not_called()
         self.assertEqual(self.lockfile.call_count, 4)
 
     def test_client_restart_refreshes_credentials_without_rediscovering(self):
@@ -361,7 +444,7 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(result["champion_id"], "22")
         self.assertEqual(self.http.call_args_list[0].args[1].port, 54321)
         self.assertEqual(self.http.call_args_list[1].args[1].port, 54322)
-        self.discovery.assert_called_once()
+        self.discovery.assert_not_called()
 
     def test_offline_discovery_is_throttled_and_retried(self):
         self.lockfile.return_value = None
@@ -376,7 +459,7 @@ class ReaderTests(unittest.TestCase):
         with patch.object(client.time, "monotonic", side_effect=[0, 11]):
             failed = self.reader.poll()
             recovered = self.reader.poll()
-        self.assertEqual(self.discovery.call_count, 2)
+        self.assertEqual(self.discovery.call_count, 1)
         self.assertEqual(recovered["phase"], "Lobby")
         self.assertNotIn("fixture-token", json.dumps(failed))
 
@@ -592,12 +675,14 @@ class GameflowContextTests(unittest.TestCase):
 
 class LockfileAndTransportTests(unittest.TestCase):
     def test_reader_uses_allowed_gets_and_replaces_choices_without_stale_state(self):
-        first = choice_session(0, phase="BAN_PICK", subset=True)
+        first = choice_session(0, phase="PLANNING", subset=True)
+        first["actions"][0][0]["isInProgress"] = False
         second = choice_session(0, phase="BAN_PICK", subset=True)
+        second["actions"][0][0]["isInProgress"] = False
         second["benchChampions"] = [{"championId": 157}]
         opener = MagicMock()
         response = opener.open.return_value.__enter__.return_value
-        payloads = ["ChampSelect", gameflow(), first, [22, 99], [22, 99, 555],
+        payloads = ["ChampSelect", gameflow(), first, [22, 99],
                     "ChampSelect", gameflow(), second, [157, 555], [157, 555],
                     "ChampSelect", gameflow(), choice_session(), [22, 99],
                     "GameStart", gameflow(phase="GameStart")]
@@ -613,7 +698,7 @@ class LockfileAndTransportTests(unittest.TestCase):
         self.assertEqual(states[3]["available_champion_sources"], {})
         self.assertTrue(all(not state["availability_incomplete"] for state in states))
         paths = [client._PHASE_PATH, client._GAMEFLOW_PATH, client._SESSION_PATH]
-        expected = [*paths, client._SUBSET_PATH, client._PICKABLE_PATH,
+        expected = [*paths, client._SUBSET_PATH,
                     *paths, client._SUBSET_PATH, client._PICKABLE_PATH,
                     *paths, client._PICKABLE_PATH, client._PHASE_PATH, client._GAMEFLOW_PATH]
         self.assertEqual([call.args[0].full_url for call in opener.open.call_args_list],

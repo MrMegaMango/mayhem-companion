@@ -1,4 +1,4 @@
-"""Serialized background HTTP, local API and OCR work."""
+"""Local polling and OCR stay independent of public statistics downloads."""
 import logging
 import queue
 import threading
@@ -6,7 +6,7 @@ import time
 
 from .capture import CaptureReader
 from .client import ClientReader, is_aram_mode, is_tft_mode
-from .data import StatsProvider
+from .data import RETRY_DELAY, StatsProvider
 from .game import poll_active_player
 from .matching import detect_offers
 from .tft_data import TftProvider
@@ -17,16 +17,24 @@ class Worker(threading.Thread):
     IDLE_SCAN_SECONDS = 0.8
     OFFER_GONE_SECONDS = 1.2
     OFFER_GONE_MIN_FRAMES = 2
+    SELECT_POLL_SECONDS = 0.25
+    DEFAULT_POLL_SECONDS = 0.75
 
     def __init__(self, output, requests, stop, cache):
         super().__init__(daemon=True, name="mayhem-reader")
         self.output, self.requests, self.stop = output, requests, stop
         self.provider = StatsProvider(cache)
+        self.data_pending = {}
+        self.data_lock = threading.Lock()
+        self.data_ready = threading.Event()
+        self.data_thread = None
+        self.catalog_results = queue.Queue()
         self.tft_provider = None
         self.cache = cache
         self.tft_requests = queue.Queue()
         self.tft_thread = None
         self.champion_provider = None
+        self.champion_retry_at = 0.0
         self.champion_requests = queue.Queue(maxsize=1)
         self.champion_thread = None
         self.catalog = None
@@ -45,8 +53,58 @@ class Worker(threading.Thread):
         self.output.put((kind, value))
 
     def load(self):
-        self.catalog = self.provider.load_catalog()
-        self.emit("catalog", self.catalog)
+        self.catalog_results.put(self.provider.load_catalog())
+
+    def publish_catalogs(self):
+        # The UI must receive a catalog before offers recognized against it.
+        try:
+            while True:
+                self.catalog = self.catalog_results.get_nowait()
+                self.emit("catalog", self.catalog)
+        except queue.Empty:
+            pass
+
+    def perform_aram_task(self, task, payload):
+        try:
+            if task == "catalog":
+                self.load()
+            elif task == "lookup":
+                token, champion, ids, stage = payload
+                rates = [self.provider.rate_for(champion, ident, stage) if ident else None for ident in ids]
+                self.emit("rates", (token, rates))
+            elif task == "spells":
+                token, champion = payload
+                self.emit("spells", (token, self.provider.summoner_spells_for(champion)))
+            elif task == "builds":
+                token, champion = payload
+                self.emit("builds", (token, self.provider.item_builds_for(champion)))
+        except Exception as exc:
+            if task == "catalog":
+                self.emit("error", f"Data unavailable: {exc}. Use Retry data.")
+            else:
+                self.emit(task + "_error", (payload[0], str(exc)))
+
+    def run_aram_data(self):
+        # One provider owns its mutable cache. Keep only the latest waiting
+        # request of each type so rapid champion changes cannot build a backlog.
+        while not self.stop.is_set():
+            if not self.data_ready.wait(0.2) or self.stop.is_set():
+                continue
+            with self.data_lock:
+                task = next(iter(self.data_pending))
+                payload = self.data_pending.pop(task)
+                if not self.data_pending:
+                    self.data_ready.clear()
+            self.perform_aram_task(task, payload)
+
+    def queue_aram_task(self, task, payload):
+        with self.data_lock:
+            self.data_pending[task] = payload
+            self.data_ready.set()
+        if self.data_thread is None:
+            self.data_thread = threading.Thread(target=self.run_aram_data,
+                                                name="mayhem-aram-data", daemon=True)
+            self.data_thread.start()
 
     def perform_tft_task(self, task, payload):
         token = payload[0]
@@ -87,15 +145,25 @@ class Worker(threading.Thread):
 
     def perform_champion_task(self, payload):
         token, champion_ids = payload
+        if token is None and time.monotonic() < self.champion_retry_at:
+            return
         try:
             # A separate provider owns its mutable in-memory cache. Disk cache
             # writes are atomic and can be shared with the ARAM lookup worker.
             if self.champion_provider is None:
                 self.champion_provider = StatsProvider(self.cache)
             data = self.champion_provider.champion_rates_for(champion_ids)
-            self.emit("champions", (token, data))
+            if token is not None:
+                self.champion_retry_at = 0.0
+                self.emit("champions", (token, data))
         except Exception as exc:
-            self.emit("champions_error", (token, str(exc)))
+            if token is not None:
+                self.champion_retry_at = time.monotonic() + RETRY_DELAY
+                self.emit("champions_error", (token, str(exc)))
+            else:
+                # A failed speculative warmup must not impose the provider's
+                # retry cooldown on the first real selection request.
+                self.champion_provider = None
 
     def run_champion_data(self):
         while not self.stop.is_set():
@@ -119,6 +187,18 @@ class Worker(threading.Thread):
         else:
             self.champion_requests.task_done()
         self.champion_requests.put_nowait(payload)
+        self.start_champion_data()
+
+    def prewarm_champions(self):
+        try:
+            # Load the aggregate snapshot without per-champion downloads.
+            # Never displace a pending request for choices already on screen.
+            self.champion_requests.put_nowait((None, []))
+        except queue.Full:
+            return
+        self.start_champion_data()
+
+    def start_champion_data(self):
         if self.champion_thread is None:
             self.champion_thread = threading.Thread(target=self.run_champion_data,
                                                     name="mayhem-champion-data", daemon=True)
@@ -159,10 +239,8 @@ class Worker(threading.Thread):
         return game
 
     def run(self):
-        try:
-            self.load()
-        except Exception as exc:
-            self.emit("error", f"Data unavailable: {exc}. Use Retry data.")
+        self.queue_aram_task("catalog", None)
+        self.prewarm_champions()
         while not self.stop.wait(0.05):
             try:
                 while True:
@@ -170,7 +248,7 @@ class Worker(threading.Thread):
                     if task == "enabled":
                         self.enabled = payload
                     elif task == "retry":
-                        self.load()
+                        self.queue_aram_task("catalog", None)
                     elif task == "scan":
                         self.next_scan = 0
                         self.pending_offers = ()
@@ -178,26 +256,8 @@ class Worker(threading.Thread):
                         # Refresh the UI after confirmation, even if these are
                         # the same IDs it had before manual browsing/rescan.
                         self.force_offer_emit = True
-                    elif task == "lookup":
-                        token, champion, ids, stage = payload
-                        try:
-                            rates = [self.provider.rate_for(champion, ident, stage)
-                                     if ident else None for ident in ids]
-                            self.emit("rates", (token, rates))
-                        except Exception as exc:
-                            self.emit("lookup_error", (token, str(exc)))
-                    elif task == "spells":
-                        token, champion = payload
-                        try:
-                            self.emit("spells", (token, self.provider.summoner_spells_for(champion)))
-                        except Exception as exc:
-                            self.emit("spells_error", (token, str(exc)))
-                    elif task == "builds":
-                        token, champion = payload
-                        try:
-                            self.emit("builds", (token, self.provider.item_builds_for(champion)))
-                        except Exception as exc:
-                            self.emit("builds_error", (token, str(exc)))
+                    elif task in ("lookup", "spells", "builds"):
+                        self.queue_aram_task(task, payload)
                     elif task in ("tft", "tft_items"):
                         self.queue_tft_task(task, payload)
                     elif task == "champions":
@@ -207,17 +267,25 @@ class Worker(threading.Thread):
             except Exception as exc:
                 logging.exception("Companion task failed")
                 self.emit("error", str(exc))
+            self.publish_catalogs()
             now = time.monotonic()
             if now >= self.next_poll:
-                self.next_poll = now + 0.75
                 try:
                     game = self.poll_game()
                     self.emit("game", game)
+                    previous_phase = self.last_game.get("phase") if self.last_game else None
+                    if (game.get("phase") in ("Matchmaking", "ReadyCheck")
+                            and game.get("phase") != previous_phase):
+                        self.prewarm_champions()
                     self.last_game = game
                 except Exception:
                     logging.exception("Local game polling failed")
                     self.last_game = {"status": "waiting"}
                     self.emit("game", self.last_game)
+                selecting = (self.last_game.get("status") == "champ_select"
+                             or self.last_game.get("phase") in ("Matchmaking", "ReadyCheck", "ChampSelect"))
+                self.next_poll = time.monotonic() + (self.SELECT_POLL_SECONDS if selecting
+                                                      else self.DEFAULT_POLL_SECONDS)
             if not (self.enabled and self.catalog and self.last_game
                     and self.last_game.get("status") == "live"
                     and self.last_game.get("is_aram") is True):

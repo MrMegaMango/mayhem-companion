@@ -245,8 +245,8 @@ def _champion_ids(values: Any, limit: int, *, bench: bool = False) -> list[str] 
     return result
 
 
-def _local_pick_open(session: Mapping) -> bool | None:
-    """Cards can be chosen only while the local player's pick action is open."""
+def _local_pick_pending(session: Mapping) -> bool | None:
+    """Assigned cards can be displayed before the local pick becomes active."""
     actions = session.get("actions")
     if not isinstance(actions, list) or len(actions) > 100:
         return None
@@ -270,7 +270,7 @@ def _local_pick_open(session: Mapping) -> bool | None:
     if action.get("completed") is True:
         return False
     if action.get("completed") is False and type(action.get("isInProgress")) is bool:
-        return action["isInProgress"]
+        return True
     return None
 
 
@@ -278,8 +278,9 @@ def _available_champion_state(session: Any, is_aram: Any, read_options=None) -> 
     """Expose direct ARAM choices, never the full eligible/owned champion pool.
 
     The current local /help schema supplies these fields and both ID endpoints.
-    Riot's 16.21 champ-select frontend uses subsetChampionIds for initial cards
-    and pickableChampionSet for bench canPlay. During BAN_PICK, bench choices
+    Riot's 16.21 frontend displays initial subsetChampionIds while championId
+    is zero, including PLANNING and picks not yet in progress. It uses
+    pickableChampionSet for bench canPlay. During BAN_PICK, bench choices
     outside the subset are locked; the normal bench opens in FINALIZATION.
     Temporary client-side swap animation cooldowns are not selection advice.
     """
@@ -328,10 +329,12 @@ def _available_champion_state(session: Any, is_aram: Any, read_options=None) -> 
     subset_enabled = session.get("allowSubsetChampionPicks")
     if type(bench_enabled) is not bool or type(subset_enabled) is not bool:
         incomplete = True
-    if phase in ("PLANNING", "GAME_STARTING"):
+    if phase == "GAME_STARTING":
         return finish()
-    card_open = _local_pick_open(session) if subset_enabled is True and phase == "BAN_PICK" else False
-    if card_open is None:
+    card_phase = phase in ("PLANNING", "BAN_PICK")
+    card_pending = (_local_pick_pending(session)
+                    if subset_enabled is True and card_phase and no_current else False)
+    if card_pending is None:
         incomplete = True
     bench_visible = bench_enabled is True and (phase == "FINALIZATION"
                                                or subset_enabled is True and phase == "BAN_PICK")
@@ -340,14 +343,15 @@ def _available_champion_state(session: Any, is_aram: Any, read_options=None) -> 
         incomplete = True
         bench_ids = []
     subset = None
-    if phase == "BAN_PICK" and subset_enabled is True and (card_open is True or bench_ids):
+    if subset_enabled is True and (card_pending is True or phase == "BAN_PICK" and bench_ids):
         # The current client exposes at most three initial champion cards.
+        # Read assigned cards fresh; never carry a subset across polls/sessions.
         subset = read_ids(_SUBSET_PATH, 3)
         if subset is None:
             incomplete = True
     held_by_others = {_positive_id(member.get("championId")) for member in session["myTeam"]
                       if isinstance(member, Mapping) and member is not player}
-    if card_open is True and subset is not None:
+    if card_pending is True and subset is not None:
         for identifier in subset:
             if identifier not in held_by_others:
                 add(identifier, "card")
@@ -401,14 +405,24 @@ class ClientReader:
     """
 
     def __init__(self):
-        self._lockfiles: list[Path] = []
+        self._lockfiles: list[Path] = [_DEFAULT_LOCKFILE]
         self._next_discovery = 0.0
-        self._needs_discovery = True
+        self._needs_discovery = False
         self._opener = _local_opener()
 
     def _credentials(self) -> _Credentials | None:
         now = time.monotonic()
-        if self._needs_discovery and now >= self._next_discovery:
+        # Most installations use the default path. Avoid a potentially slow
+        # process query before trying it, and reuse known working paths. After
+        # a connection failure, rediscovery can replace an orphaned lockfile.
+        if not self._needs_discovery or now < self._next_discovery:
+            for path in self._lockfiles:
+                credentials = _read_lockfile(path)
+                if credentials is not None:
+                    return credentials
+        if now < self._next_discovery:
+            return None
+        if now >= self._next_discovery:
             self._next_discovery = now + _DISCOVERY_INTERVAL
             discovered = _discover_lockfiles()
             self._lockfiles = list(dict.fromkeys([*discovered, *self._lockfiles]))

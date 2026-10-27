@@ -193,6 +193,51 @@ class StateTests(unittest.TestCase):
         self.assertEqual(app.requests.qsize(), 1)
         app.choice_panel.set_context.assert_called_with(["157"], "157", app.catalog["champions"], incomplete=False)
 
+    def test_choices_and_rates_can_arrive_before_catalog_without_waiting_for_current_champion(self):
+        for current in (None, "157"):
+            with self.subTest(current=current):
+                app = self.make_view()
+                catalog = {**app.catalog, "augments": {}}
+                app.catalog = None
+                app.champ_box = MagicMock()
+                for card in app.cards:
+                    card["box"] = MagicMock()
+                game = {"status": "champ_select", "is_aram": True, "phase": "ChampSelect",
+                        "champion_id": current, "available_champion_ids": ["157", "63"]}
+                app.handle_game(game)
+                self.assertTrue(app.choice_active)
+                self.assertIsNone(app.champion)
+                token = app.choice_token
+                rates = {"rows": [{"champion_id": "157", "win_rate": .58}]}
+                app.handle_event("champions", (token, rates))
+                app.handle_event("catalog", catalog)
+                self.assertEqual(app.champion, current)
+                self.assertEqual(app.choice_token, token)
+                app.choice_panel.set_data.assert_called_once_with(rates)
+                app.choice_panel.set_loading.assert_called_once()
+                app.choice_panel.set_context.assert_called_with(["157", "63"], current,
+                                                                catalog["champions"], incomplete=False)
+                if current:
+                    self.assertTrue(any(kind == "spells" and value[1] == current
+                                        for kind, value in app.requests.queue))
+
+    def test_late_catalog_after_leaving_select_does_not_restore_choices(self):
+        app = self.make_view()
+        catalog = {**app.catalog, "augments": {}}
+        app.catalog = None
+        app.champ_box = MagicMock()
+        for card in app.cards:
+            card["box"] = MagicMock()
+        app.handle_game({"status": "champ_select", "is_aram": True, "phase": "ChampSelect",
+                         "champion_id": None, "available_champion_ids": ["157", "63"]})
+        app.handle_game({"status": "waiting", "phase": "Lobby"})
+        token = app.choice_token
+        app.handle_event("catalog", catalog)
+        self.assertFalse(app.choice_active)
+        self.assertTrue(app.hidden)
+        self.assertIsNone(app.champion)
+        self.assertEqual(app.choice_token, token)
+
     def test_tft_auto_mode_loads_its_own_panel_once_and_stays_on_vertical_placement_path(self):
         app = self.make_view()
         tft = {"status": "tft", "is_tft": True, "is_aram": False, "phase": "InProgress"}
