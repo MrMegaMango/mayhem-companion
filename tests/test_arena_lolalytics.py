@@ -115,20 +115,25 @@ class LolalyticsArenaTests(unittest.TestCase):
         self.assertAlmostEqual(prism["win_rate"], .5415)
         self.assertEqual(prism["sample_count"], 4329)
         self.assertEqual(prism["category"], "prismatic")
-        self.assertIsNone(prism["icon_url"])
+        self.assertEqual(prism["icon_url"], "https://cdn5.lolalytics.com/item64/443090.webp")
 
     def test_unknown_and_ambiguous_names_are_omitted(self):
         self.assertEqual(self.parse(reference={})["augments"], [])
         duplicate = {**REFERENCE, "9002": {"id": "9002", "name": "Mystic-Punch"}}
         self.assertEqual(self.parse(reference=duplicate)["augments"], [])
 
-    def test_only_observed_allowlisted_item_icons_are_attached(self):
-        html = page().replace("<body>", '<body><img src="https://cdn5.lolalytics.com/item64/443090.webp">')
+    def test_all_validated_items_get_fixed_cdn_icons_without_html_images(self):
+        items = self.parse()["items"]
+        self.assertEqual({row["id"]: row["icon_url"] for row in items}, {
+            "443090": "https://cdn5.lolalytics.com/item64/443090.webp",
+            "223153": "https://cdn5.lolalytics.com/item64/223153.webp"})
+
+    def test_untrusted_html_image_urls_cannot_change_item_icon_urls(self):
+        html = page().replace("<body>", '<body><img src="https://evil.invalid/item64/443090.webp">'
+                              '<img src="https://cdn5.lolalytics.com/unsafe/223153.webp">')
         items = self.parse(html)["items"]
         self.assertEqual(items[0]["icon_url"], "https://cdn5.lolalytics.com/item64/443090.webp")
-        self.assertIsNone(items[1]["icon_url"])
-        html = page().replace("<body>", '<body><img src="https://evil.invalid/item64/443090.webp">')
-        self.assertIsNone(self.parse(html)["items"][0]["icon_url"])
+        self.assertEqual(items[1]["icon_url"], "https://cdn5.lolalytics.com/item64/223153.webp")
 
     def test_zero_samples_are_unknown_rates(self):
         data = fixture()

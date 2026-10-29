@@ -31,7 +31,6 @@ class _Page(HTMLParser):
     def __init__(self, html):
         super().__init__(convert_charrefs=True)
         self.scripts, self.canonicals = [], []
-        self.item_icons = {}
         self.capture = None
         self.feed(html)
         self.close()
@@ -46,11 +45,6 @@ class _Page(HTMLParser):
             self.capture = []
         elif tag == "link" and attrs.get("rel") == "canonical":
             self.canonicals.append(attrs.get("href"))
-        elif tag == "img":
-            source = attrs.get("src", "")
-            match = re.fullmatch(r"https://cdn5\.lolalytics\.com/item64/([1-9][0-9]{0,9})\.webp", source)
-            if match:
-                self.item_icons[match[1]] = source
 
     def handle_endtag(self, tag):
         if tag == "script" and self.capture is not None:
@@ -341,7 +335,12 @@ def parse_champion(html, champion, url, augment_catalog, *, expected_patch=None)
                     continue
                 name = _name(item_names[ident])
                 item_ids.add(ident)
-                items.append({"id": ident, "name": name, "icon_url": page.item_icons.get(ident), "description": "",
+                # All source item IDs use this verified 64px CDN route. Most
+                # rows are hydrated in the browser, so their images need not be
+                # present in the server-rendered HTML. Never use page-supplied
+                # image origins or paths to construct the download URL.
+                icon_url = f"https://cdn5.lolalytics.com/item64/{ident}.webp"
+                items.append({"id": ident, "name": name, "icon_url": icon_url, "description": "",
                               "category": category, "win_rate": rate, "sample_count": samples,
                               "low_sample": samples < 200})
         return {"source": "Lolalytics", "source_url": url, "game_mode": "Arena",
