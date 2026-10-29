@@ -1,4 +1,4 @@
-"""On-demand Arena statistics from winrate.lol's public champion pages.
+"""On-demand Arena statistics with a champion-specific Lolalytics fallback.
 
 The source's own ``Win Rate`` label is preserved: it does not define its finish
 cutoff on these pages. Items are individual observations, never joint builds.
@@ -466,10 +466,39 @@ class ArenaProvider:
             raise _error("unknown champion")
         slug = champion.get("slug")
         if not slug:
-            # No link means the source has no observed row for this champion.
-            return {**_metadata(catalog["version"], INDEX_URL), "champion_id": ident,
-                    "champion_name": champion["name"], "summary": {}, "augments": [], "items": [],
-                    "stale": catalog["stale"], "fetched_at": catalog.get("fetched_at"),
-                    "missing": True}
+            # The index omits some low-sample champions even when their detail
+            # pages have observations. Source routes use Data Dragon's internal
+            # champion name (e.g. MonkeyKing), not the display name. The fetched
+            # page still has to pass canonical URL, Arena mode and champion checks.
+            raw = champion.get("raw_name", "")
+            if not isinstance(raw, str) or not re.fullmatch(r"[A-Za-z0-9]{1,40}", raw):
+                raise _error("invalid champion route")
+            slug = raw.lower()
         url = INDEX_URL + "/" + slug
-        return self._get(url, lambda html: parse_champion(html, champion, url), force=force)
+        try:
+            data = self._get(url, lambda html: parse_champion(html, champion, url), force=force)
+        except DataUnavailableError:
+            fallback = self._fallback_champion(champion, catalog, force=force)
+            if fallback is not None:
+                return fallback
+            raise
+        if not data.get("augments"):
+            fallback = self._fallback_champion(champion, catalog, force=force)
+            if fallback is not None and (fallback.get("augments") or not data.get("items")):
+                return fallback
+        return data
+
+    def _fallback_champion(self, champion, catalog, *, force=False):
+        # A complete snapshot keeps each row and its metadata on one source.
+        # Do not fill gaps with global augment rates or another champion's data.
+        from .arena_lolalytics import champion_url, parse_champion as parse_fallback
+        try:
+            url = champion_url(champion, catalog["version"])
+            return self._get(
+                url, lambda html: parse_fallback(html, champion, url, catalog["augments"],
+                                                expected_patch=catalog["version"]),
+                force=force,
+            )
+        except DataUnavailableError:
+            # A denied/changed fallback must not erase valid primary item data.
+            return None

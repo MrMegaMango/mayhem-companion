@@ -157,6 +157,9 @@ class ArenaProviderTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.provider = ArenaProvider(Path(self.temp.name))
+        self.fallback_patch = patch.object(self.provider, "_fallback_champion", return_value=None)
+        self.fallback = self.fallback_patch.start()
+        self.addCleanup(self.fallback_patch.stop)
         self.resource = "https://ddragon.leagueoflegends.com/cdn/16.21.1/data/en_US/champion.json"
         self.payloads = {VERSIONS_URL: '["16.21.1"]', self.resource: json.dumps(DDRAGON),
                          INDEX_URL: catalog_html(), URL: detail_html()}
@@ -241,12 +244,53 @@ class ArenaProviderTests(unittest.TestCase):
             self.assertEqual(result["augments"], [])
             self.assertEqual(result["items"], [])
 
-    def test_unobserved_champion_is_missing_without_slug_guess(self):
+    def test_champion_omitted_from_index_loads_validated_detail_page(self):
+        url = INDEX_URL + "/lux"
+        self.payloads[url] = detail_html(augments="").replace("Yasuo", "Lux").replace(URL, url)
         with patch.object(self.provider, "_download", side_effect=self.download):
             result = self.provider.champion_for("99")
-            self.assertTrue(result["missing"])
-            self.assertEqual(result["summary"], {})
-            self.assertEqual(self.calls, [VERSIONS_URL, self.resource, INDEX_URL])
+            self.assertEqual(result["champion_id"], "99")
+            self.assertEqual(result["champion_name"], "Lux")
+            self.assertEqual(result["source_url"], url)
+            self.assertEqual(result["summary"]["sample_count"], 31)
+            self.assertEqual(result["augments"], [])
+            self.assertEqual(len(result["items"]), 1)
+            self.assertTrue(result["items"][0]["low_sample"])
+            self.provider.champion_for("99")
+            self.assertEqual(self.calls, [VERSIONS_URL, self.resource, INDEX_URL, url])
+
+    def test_unlisted_route_uses_internal_name_and_still_validates_display_name(self):
+        champions = copy.deepcopy(DDRAGON)
+        champions["data"]["MonkeyKing"] = {"key": "62", "id": "MonkeyKing", "name": "Wukong"}
+        self.payloads[self.resource] = json.dumps(champions)
+        url = INDEX_URL + "/monkeyking"
+        self.payloads[url] = detail_html().replace("Yasuo", "Wukong").replace(URL, url)
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            result = self.provider.champion_for("62")
+            self.assertEqual(result["champion_name"], "Wukong")
+            self.assertEqual(self.calls[-1], url)
+
+    def test_unlisted_detail_rejects_wrong_champion_mode_or_canonical(self):
+        url = INDEX_URL + "/lux"
+        valid = detail_html().replace("Yasuo", "Lux").replace(URL, url)
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            for html in (detail_html(), valid.replace("<h1>Lux</h1>", "<h1>Yasuo</h1>"),
+                         valid.replace("Arena Stats", "ARAM Stats")):
+                with self.subTest(html=html[:150]):
+                    self.payloads[url] = html
+                    with self.assertRaises(DataUnavailableError):
+                        self.provider.champion_for("99", force=True)
+
+    def test_unlisted_detail_request_failure_is_not_reported_as_empty_data(self):
+        url = INDEX_URL + "/lux"
+        for error in (DataUnavailableError("Arena source request failed (HTTP 404)"),
+                      DataUnavailableError("offline", transient=True)):
+            with self.subTest(error=str(error)):
+                self.payloads[url] = error
+                with patch.object(self.provider, "_download", side_effect=self.download):
+                    with self.assertRaises(DataUnavailableError) as raised:
+                        self.provider.champion_for("99", force=True)
+                    self.assertIs(raised.exception, error)
 
     def test_rejects_arbitrary_ids_before_network(self):
         with patch.object(self.provider, "_download") as download:
@@ -254,6 +298,40 @@ class ArenaProviderTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.provider.champion_for(ident)
             download.assert_not_called()
+
+    def test_empty_augments_uses_whole_fallback_snapshot(self):
+        self.payloads[URL] = detail_html(augments="")
+        snapshot = {"source": "Lolalytics", "version": "16.21", "champion_id": "157",
+                    "summary": {"sample_count": 20000},
+                    "augments": [{"id": "43", "win_rate": .61, "sample_count": 2000}],
+                    "items": [{"id": "223031", "win_rate": .52, "sample_count": 3000}]}
+        self.fallback.return_value = snapshot
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            result = self.provider.champion_for("157", force=True)
+        self.assertEqual(result, snapshot)
+        self.fallback.assert_called_once()
+        self.assertTrue(self.fallback.call_args.kwargs["force"])
+        self.assertEqual(self.fallback.call_args.args[0]["id"], "157")
+
+    def test_primary_failure_uses_available_champion_fallback(self):
+        self.payloads[URL] = DataUnavailableError("offline", transient=True)
+        snapshot = {"source": "Lolalytics", "champion_id": "157", "augments": [{"id": "43"}]}
+        self.fallback.return_value = snapshot
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.assertEqual(self.provider.champion_for("157"), snapshot)
+
+    def test_complete_primary_does_not_query_fallback(self):
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.assertEqual(self.provider.champion_for("157")["source"], "winrate.lol")
+        self.fallback.assert_not_called()
+
+    def test_empty_fallback_does_not_discard_primary_items(self):
+        self.payloads[URL] = detail_html(augments="")
+        self.fallback.return_value = {"source": "Lolalytics", "augments": [], "items": []}
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            result = self.provider.champion_for("157")
+        self.assertEqual(result["source"], "winrate.lol")
+        self.assertEqual(len(result["items"]), 1)
 
     def test_corrupted_cache_refetched_instead_of_used(self):
         with patch.object(self.provider, "_download", side_effect=self.download):

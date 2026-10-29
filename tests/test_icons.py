@@ -88,6 +88,15 @@ class IconLoaderTests(unittest.TestCase):
                             url.replace("/img/", "/img/../")):
                 self.assertFalse(loader.request(invalid), invalid)
 
+    def test_lolalytics_icons_allow_only_the_observed_item_cdn_path(self):
+        loader, _, _ = self.loader(start=False)
+        url = "https://cdn5.lolalytics.com/item64/223153.webp"
+        self.assertTrue(loader.request(url))
+        for invalid in (url.replace("https:", "http:"), url + "?x=1", url + "#x",
+                        url.replace("cdn5.lolalytics.com", "cdn5.lolalytics.com.evil.test"),
+                        url.replace("/item64/", "/item64/../"), url.replace(".webp", ".exe")):
+            self.assertFalse(loader.request(invalid), invalid)
+
     def test_slow_network_never_blocks_other_requests(self):
         entered, release = threading.Event(), threading.Event()
         def download(url):
