@@ -25,16 +25,19 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests
       - name: Build Windows installer
+        id: package
         run: python packaging/build.py
       - name: Test installation and uninstall
         shell: pwsh
         run: ./packaging/test-install.ps1 -InstallerPath ./build/windows/installer/MayhemCompanionSetup.exe -ReportPath ./build/windows/reports/installed-runtime.json
       - uses: actions/upload-artifact@v4
+        if: always() && steps.package.outcome == 'success'
         with:
           name: MayhemCompanion-Windows
           path: |
             build/windows/installer/MayhemCompanionSetup.exe
             build/windows/installer/SHA256SUMS.txt
             build/windows/reports/*.json
+            build/windows/dist/MayhemCompanion/**
           if-no-files-found: error
           retention-days: 14

@@ -1,4 +1,5 @@
 import ctypes
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -180,6 +181,56 @@ class StartupAndLaunchTests(unittest.TestCase):
                 patch.object(autostart, "_wait_for_watcher_exit", return_value=False):
             self.assertFalse(autostart.remove_owned_startup())
 
+    def test_resume_starts_only_a_verified_owned_watcher(self):
+        for result, success, launches in ((0, True, 1), (autostart._SHORTCUT_SKIPPED, True, 0),
+                                          (3, False, 0)):
+            with self.subTest(result=result), patch.object(autostart.sys, "platform", "win32"), \
+                    patch.object(autostart.sys, "frozen", True, create=True), \
+                    patch.object(autostart, "_configure_frozen_shortcut", return_value=result) as inspect, \
+                    patch.object(autostart, "_launch_hidden") as launch:
+                self.assertEqual(autostart.resume_owned_startup(), success)
+                inspect.assert_called_once_with("inspect", Path.home() / "MayhemCompanion")
+                self.assertEqual(launch.call_count, launches)
+                if launches:
+                    launch.assert_called_once_with([sys.executable, "--watch-league"])
+
+    def test_resume_reports_inspection_or_launch_failure_without_changing_startup(self):
+        with patch.object(autostart.sys, "platform", "win32"), \
+                patch.object(autostart.sys, "frozen", True, create=True), \
+                patch.object(autostart, "_configure_frozen_shortcut", side_effect=OSError("fixture")), \
+                patch.object(autostart, "_launch_hidden") as launch:
+            self.assertFalse(autostart.resume_owned_startup())
+            launch.assert_not_called()
+        with patch.object(autostart.sys, "platform", "win32"), \
+                patch.object(autostart.sys, "frozen", True, create=True), \
+                patch.object(autostart, "_configure_frozen_shortcut", return_value=0), \
+                patch.object(autostart, "_launch_hidden", side_effect=OSError("fixture")):
+            self.assertFalse(autostart.resume_owned_startup())
+
+    def test_resume_is_not_available_to_source_or_non_windows_launchers(self):
+        for platform, frozen in (("win32", False), ("test", True)):
+            with self.subTest(platform=platform, frozen=frozen), \
+                    patch.object(autostart.sys, "platform", platform), \
+                    patch.object(autostart.sys, "frozen", frozen, create=True), \
+                    patch.object(autostart, "_configure_frozen_shortcut") as inspect:
+                self.assertFalse(autostart.resume_owned_startup())
+                inspect.assert_not_called()
+
+    def test_bundle_launcher_routes_resume_and_rejects_combined_actions(self):
+        path = Path(__file__).resolve().parent.parent / "packaging" / "launcher.py"
+        spec = importlib.util.spec_from_file_location("mayhem_bundle_launcher_test", path)
+        launcher = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(launcher)
+        for success in (True, False):
+            with self.subTest(success=success), \
+                    patch.object(autostart, "resume_owned_startup", return_value=success) as resume:
+                self.assertEqual(launcher.main(["--resume-owned-startup"]), 0 if success else 1)
+                resume.assert_called_once_with()
+        with patch.object(autostart, "resume_owned_startup") as resume:
+            for extra in ("--show", "--uninstall-cleanup", "--watch-league", "--resume-owned-startup"):
+                self.assertEqual(launcher.main(["--resume-owned-startup", extra]), 2)
+            resume.assert_not_called()
+
     def test_wait_observes_watcher_exit_then_releases_its_probe_handle(self):
         native = MagicMock()
         native.acquire_mutex.side_effect = [None, None, 123]
@@ -242,6 +293,49 @@ class StartupAndLaunchTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "win32", "Windows native APIs")
 class NativeWindowsTests(unittest.TestCase):
+    def test_resume_inspects_exact_owner_and_arguments_without_modifying_shortcuts(self):
+        # Exercise WScript.Shell against temporary links; fixture files are never executed.
+        with tempfile.TemporaryDirectory(prefix="mayhem-resume-") as directory:
+            storage = Path(directory)
+            shortcut = storage / autostart.STARTUP_SHORTCUT_NAME
+            first, second = storage / "first.exe", storage / "second.exe"
+            legacy = storage / "MayhemCompanion" / ".venv" / "Scripts" / "pythonw.exe"
+            legacy.parent.mkdir(parents=True)
+            for executable in (first, second, legacy):
+                executable.write_bytes(b"test fixture, never executed")
+            powershell = (Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" /
+                          "WindowsPowerShell" / "v1.0" / "powershell.exe")
+            fixture_script = (
+                "$shell = New-Object -ComObject WScript.Shell; "
+                "$link = $shell.CreateShortcut($env:MAYHEM_TEST_LINK); "
+                "$link.TargetPath = $env:MAYHEM_TEST_TARGET; "
+                "$link.Arguments = $env:MAYHEM_TEST_ARGS; $link.Save()"
+            )
+            with patch.object(autostart.sys, "frozen", True, create=True), \
+                    patch.object(autostart.sys, "executable", str(first)), \
+                    patch.object(autostart.Path, "home", return_value=storage), \
+                    patch.object(autostart, "startup_shortcut_path", return_value=shortcut), \
+                    patch.object(autostart, "_launch_hidden") as launch:
+                self.assertTrue(autostart.resume_owned_startup())
+                self.assertFalse(shortcut.exists())
+                launch.assert_not_called()
+                for target, arguments, owned in (
+                    (first, "--watch-league", True), (second, "--watch-league", False),
+                    (first, "--show", False), (legacy, "-m mayhem.autostart", False),
+                ):
+                    with self.subTest(target=target.name, arguments=arguments):
+                        environment = dict(os.environ, MAYHEM_TEST_LINK=str(shortcut),
+                                           MAYHEM_TEST_TARGET=str(target), MAYHEM_TEST_ARGS=arguments)
+                        subprocess.run([str(powershell), "-NoProfile", "-NonInteractive", "-Command",
+                                        fixture_script], env=environment, check=True, timeout=15,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+                        before = shortcut.read_bytes()
+                        launch.reset_mock()
+                        self.assertTrue(autostart.resume_owned_startup())
+                        self.assertEqual(shortcut.read_bytes(), before)
+                        self.assertEqual(launch.call_count, int(owned))
+
     def test_frozen_shortcut_roundtrip_and_uninstall_leave_foreign_owners_untouched(self):
         # Only a temporary .lnk is touched, never the user's real Startup folder.
         with tempfile.TemporaryDirectory(prefix="mayhem-startup-") as directory:

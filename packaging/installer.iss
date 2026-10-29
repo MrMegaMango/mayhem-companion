@@ -49,6 +49,8 @@ Name: "{group}\Mayhem Companion"; Filename: "{app}\{#AppExeName}"; Parameters: "
 Name: "{autodesktop}\Mayhem Companion"; Filename: "{app}\{#AppExeName}"; Parameters: "--show"; WorkingDir: "{app}"; Tasks: desktopicon; Check: not WizardNoIcons
 
 [Run]
+; Resume an already-enabled watcher stopped during an upgrade, including silent installs.
+Filename: "{app}\{#AppExeName}"; Parameters: "--resume-owned-startup"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#AppExeName}"; Parameters: "--show"; Description: "Open Mayhem Companion"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]

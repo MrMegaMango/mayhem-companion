@@ -19,6 +19,7 @@ import re
 import tempfile
 import threading
 import time
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -452,6 +453,7 @@ class TftProvider:
             augments, augment_meta = _augments(locale, None, set_id, icons)
         return {
             "_schema": 1, "_patch_id": patch_id, "_set_id": set_id, "_rank_id": 1,
+            "_snapshot_revision": uuid.uuid4().hex,
             "_fetched_at": time.time(), "source": "Tactics.tools",
             "source_url": SITE + "/team-compositions", "patch": patch, "set": "Set " + set_id,
             "updated": _date(stats.get("lastUpdated")), "updated_scope": "dataset", "rank": "Diamond+", "queue": "Ranked",
@@ -493,7 +495,13 @@ class TftProvider:
         previous = self._read(filename)
         if not self._valid_build_cache(previous, snapshot, unit_id):
             previous = None
-        if (previous and not force and previous["_fetched_at"] >= snapshot["_fetched_at"]
+        # Refreshes can share a wall-clock tick. Tie builds to the exact snapshot
+        # instead of treating equal fetch timestamps as proof they are current.
+        revision = snapshot.get("_snapshot_revision")
+        same_snapshot = previous and (
+            previous.get("_snapshot_revision") == revision if revision is not None
+            else previous["_fetched_at"] >= snapshot["_fetched_at"])
+        if (previous and not force and same_snapshot
                 and 0 <= time.time() - previous["_fetched_at"] < CACHE_TTL):
             return copy.deepcopy({**previous, "stale": snapshot["stale"] or previous.get("stale", False)})
         try:
@@ -522,7 +530,8 @@ class TftProvider:
             builds.sort(key=lambda row: row["games"], reverse=True)
             result = {key: copy.deepcopy(snapshot[key]) for key in (
                 "_schema", "_patch_id", "_set_id", "patch", "set", "source", "updated", "rank", "queue", "stale")}
-            result.update({"_fetched_at": time.time(), "fetched_at": _date(time.time()), "updated_scope": "dataset", "source_url": SITE + "/units/" + unit_id.lower(),
+            result.update({"_snapshot_revision": revision,
+                           "_fetched_at": time.time(), "fetched_at": _date(time.time()), "updated_scope": "dataset", "source_url": SITE + "/units/" + unit_id.lower(),
                            "unit": copy.deepcopy(unit), "items": builds, "scope": "unit_three_item_build"})
         except DataUnavailableError as error:
             if previous is None or not error.transient:

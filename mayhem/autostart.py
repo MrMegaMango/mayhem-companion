@@ -36,21 +36,23 @@ $ErrorActionPreference = 'Stop'
 $mayhemLinkPath = $env:MAYHEM_STARTUP_LINK
 $mayhemTarget = $env:MAYHEM_STARTUP_EXE
 $mayhemMode = $env:MAYHEM_STARTUP_MODE
+$mayhemOwnedOnly = $mayhemMode -in @('cleanup', 'inspect')
 $mayhemShell = New-Object -ComObject WScript.Shell
 if (Test-Path -LiteralPath $mayhemLinkPath) {
     $mayhemExisting = $mayhemShell.CreateShortcut($mayhemLinkPath)
     $mayhemOwned = [String]::Equals($mayhemExisting.TargetPath, $mayhemTarget,
         [StringComparison]::OrdinalIgnoreCase) -and $mayhemExisting.Arguments -eq '--watch-league'
-    $mayhemLegacy = $mayhemMode -ne 'cleanup' -and
+    $mayhemLegacy = -not $mayhemOwnedOnly -and
         [String]::Equals($mayhemExisting.TargetPath, $env:MAYHEM_LEGACY_PYTHON,
         [StringComparison]::OrdinalIgnoreCase) -and $mayhemExisting.Arguments -eq '-m mayhem.autostart'
     if (-not $mayhemOwned -and -not $mayhemLegacy) {
-        if ($mayhemMode -eq 'cleanup') { exit 10 }
+        if ($mayhemOwnedOnly) { exit 10 }
         exit 3
     }
-} elseif ($mayhemMode -eq 'cleanup') {
+} elseif ($mayhemOwnedOnly) {
     exit 10
 }
+if ($mayhemMode -eq 'inspect') { exit 0 }
 if ($mayhemMode -ne 'enable') {
     if (Test-Path -LiteralPath $mayhemLinkPath) { [IO.File]::Delete($mayhemLinkPath) }
     exit 0
@@ -270,6 +272,27 @@ def remove_owned_startup() -> bool:
         if result == _SHORTCUT_SKIPPED:
             return True
         return result == 0 and _wait_for_watcher_exit()
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def resume_owned_startup() -> bool:
+    """Resume this installation's enabled watcher after an upgrade.
+
+    Inspection never changes the shortcut or opts the user in. Absent, legacy,
+    and other installation shortcuts are successful no-ops. The watcher mutex
+    prevents a duplicate if the existing process survived the upgrade.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return False
+    try:
+        result = _configure_frozen_shortcut("inspect", Path.home() / "MayhemCompanion")
+        if result == _SHORTCUT_SKIPPED:
+            return True
+        if result != 0:
+            return False
+        _launch_hidden(watcher_command())
+        return True
     except (OSError, subprocess.SubprocessError):
         return False
 

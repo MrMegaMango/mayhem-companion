@@ -32,6 +32,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         from mayhem.autostart import remove_owned_startup
         return 0 if remove_owned_startup() else 1
 
+    if "--resume-owned-startup" in arguments:
+        if arguments != ["--resume-owned-startup"]:
+            return 2
+        from mayhem.autostart import resume_owned_startup
+        return 0 if resume_owned_startup() else 1
+
     from mayhem.app import main as run_app
     original_arguments = sys.argv
     try:

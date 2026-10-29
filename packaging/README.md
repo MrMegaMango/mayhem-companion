@@ -1,13 +1,16 @@
 # Windows installer builds
 
-The **Windows installer** GitHub Actions workflow builds an x64 Windows app and
+The **Windows installer** GitHub Actions workflow uses standard Python to build an x64 Windows app and
 tests installation, the installed runtime, and removal on a clean Windows runner.
 Run it from Actions, then publish the reviewed `MayhemCompanionSetup.exe` and
 `SHA256SUMS.txt` files as a GitHub release. The website's download link follows the
 latest release. Publish the release before deploying a website that links to it.
 
 For a local bundle, create a separate Windows Python 3.12 virtual environment and
-install `packaging/requirements-build.txt`. Run:
+install `packaging/requirements-build.txt`.
+
+Use an official Python distribution. Customized embedded Python runtimes may
+depend on extra vendor files and should not be used for release builds. Run:
 
 ```powershell
 python packaging/build.py --bundle-only

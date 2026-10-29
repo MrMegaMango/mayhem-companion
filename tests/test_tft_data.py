@@ -185,11 +185,39 @@ class TftDataTests(unittest.TestCase):
             self.assertTrue(self.provider.items_for("DA_Ahri", force=True)["stale"])
 
     def test_snapshot_refresh_revalidates_fresh_same_patch_builds(self):
+        # Windows clock resolution can put all requests in the same clock tick.
+        with patch("mayhem.tft_data.time.time", return_value=1800000000.0):
+            self.load()
+            self.builds()
+            self.load(force=True)
+            self.requests.clear()
+            self.builds()
+            self.assertEqual(len(self.requests), 1)
+            self.requests.clear()
+            self.builds()
+            self.assertEqual(self.requests, [])
+
+    def test_fresh_build_disk_cache_survives_provider_restart(self):
         self.load()
         self.builds()
-        self.load(force=True)
-        self.requests.clear()
-        self.builds()
+        provider = TftProvider(self.tmp.name)
+        with patch.object(provider, "_get_text", side_effect=AssertionError("network")):
+            self.assertFalse(provider.items_for("DA_Ahri")["stale"])
+
+    def test_pre_revision_build_cache_remains_usable_until_refresh(self):
+        snapshot = self.load()
+        builds = self.builds()
+        snapshot.pop("_snapshot_revision")
+        builds.pop("_snapshot_revision")
+        self.provider._write("snapshot.json", snapshot)
+        self.provider._write("builds-16210-DA_Ahri.json", builds)
+        provider = TftProvider(self.tmp.name)
+        with patch.object(provider, "_get_text", side_effect=AssertionError("network")):
+            self.assertFalse(provider.items_for("DA_Ahri")["stale"])
+        with patch.object(provider, "_get_text", side_effect=self.get):
+            provider.load(force=True)
+            self.requests.clear()
+            provider.items_for("DA_Ahri")
         self.assertEqual(len(self.requests), 1)
 
     def test_corrupt_build_cache_is_ignored(self):
