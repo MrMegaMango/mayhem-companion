@@ -84,7 +84,7 @@ h3 { font-size: 18px; line-height: 1.4; letter-spacing: -.025em; font-weight: 60
 .install-heading h2 { font-size: clamp(28px, 3vw, 36px); }
 .install-heading p:last-child { color: var(--muted); font-size: 14px; margin-top: 14px; }
 .download-button { flex-shrink: 0; white-space: nowrap; }
-.setup-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; list-style: none; margin: 36px 0 0; padding: 30px 0 0; border-top: 1px solid #2a3c48; }
+.setup-steps { display: grid; grid-template-columns: repeat(2, 1fr); gap: 30px; list-style: none; margin: 36px 0 0; padding: 30px 0 0; border-top: 1px solid #2a3c48; }
 .setup-steps li { display: flex; align-items: flex-start; gap: 13px; }
 .step-number { display: grid; place-items: center; flex-shrink: 0; width: 25px; height: 25px; font-size: 11px; color: var(--accent); background: #223c3e; border-radius: 50%; margin-top: 2px; }
 .setup-steps h3 { font-size: 14px; }
@@ -93,6 +93,9 @@ h3 { font-size: 18px; line-height: 1.4; letter-spacing: -.025em; font-weight: 60
 code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; color: #d5e8ed; font-size: .95em; }
 .install-bottom { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
 .install-bottom > span { color: #8199ab; font-size: 12px; }
+.install-help { margin-top: 28px; }
+.install-help summary { padding-block: 16px; font-size: 13px; }
+.install-help code { overflow-wrap: anywhere; }
 .install-notice { border-top: 1px solid #2a3c48; padding-top: 20px; margin-top: 24px; font-size: 12px; color: #a2b4c5; line-height: 1.75; }
 .install-notice a { color: #c2d2dc; }
 .feedback { display: flex; justify-content: space-between; gap: 60px; align-items: center; padding-block: 68px; }

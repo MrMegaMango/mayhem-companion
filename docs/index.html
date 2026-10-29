@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b111a">
   <title>Mayhem Companion — A clearer view beside your game</title>
-  <meta name="description" content="A free Windows companion for ARAM Mayhem, Arena and TFT. Champion choices, augment stats, builds and reference data beside your game. Personal prototype; Python setup required.">
+  <meta name="description" content="A free Windows companion for ARAM Mayhem, Arena and TFT. Champion choices, augment stats, builds and reference data beside your game. Download the Windows installer; no Python setup needed.">
   <link rel="canonical" href="https://arammayhem.pages.dev/">
   <meta property="og:title" content="Mayhem Companion">
   <meta property="og:description" content="Your game. A clearer view. A free Windows companion for ARAM Mayhem, Arena and TFT.">
@@ -34,13 +34,13 @@
     <section class="hero page-width" aria-labelledby="hero-title">
       <div class="hero-intro">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Free for Windows <span class="eyebrow-divider">/</span> Source download</p>
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Free for Windows <span class="eyebrow-divider">/</span> 64-bit</p>
           <h1 id="hero-title">Your game. <span>A clearer view.</span></h1>
           <p class="hero-description">A desktop companion for ARAM Mayhem, Arena and TFT.</p>
         </div>
         <div class="hero-download">
           <div class="hero-actions">
-            <a class="button button-primary" href="#install">Get the app <span aria-hidden="true">↓</span></a>
+            <a class="button button-primary" href="https://github.com/MrMegaMango/mayhem-companion/releases/latest/download/MayhemCompanionSetup.exe">Download for Windows <span aria-hidden="true">↓</span></a>
           </div>
           <p class="hero-note">Personal prototype · Not Riot-approved<br><a href="#limitations">Limitations</a></p>
         </div>
@@ -105,18 +105,35 @@
           <div>
             <p class="eyebrow">Get started</p>
             <h2 id="install-title">Bring it to your desktop.</h2>
-            <p>This version runs from source. Windows, Python 3.12+ and PowerShell are required.</p>
+            <p>Windows 10/11, 64-bit. No Python or PowerShell setup needed.</p>
           </div>
-          <a class="button button-primary download-button" href="https://github.com/MrMegaMango/mayhem-companion/archive/refs/heads/main.zip">Download source ZIP <span aria-hidden="true">↓</span></a>
+          <a class="button button-primary download-button" href="https://github.com/MrMegaMango/mayhem-companion/releases/latest/download/MayhemCompanionSetup.exe">Download for Windows <span aria-hidden="true">↓</span></a>
         </div>
         <ol class="setup-steps">
-          <li><span class="step-number" aria-hidden="true">1</span><div><h3>Prepare Windows</h3><p>Install <a href="https://www.python.org/downloads/windows/">Python 3.12 or later</a> with Tk support. English OCR must be available in Windows.</p></div></li>
-          <li><span class="step-number" aria-hidden="true">2</span><div><h3>Extract &amp; set up</h3><p>Extract the ZIP into a local folder. Run <code>Setup.ps1</code> with PowerShell.</p></div></li>
-          <li><span class="step-number" aria-hidden="true">3</span><div><h3>Open the companion</h3><p>Use the desktop shortcut. Play League in borderless or windowed mode; find the M icon in the tray.</p></div></li>
+          <li><span class="step-number" aria-hidden="true">1</span><div><h3>Run the installer</h3><p>Open <code>MayhemCompanionSetup.exe</code> and follow the setup window. Python and the app are included.</p></div></li>
+          <li><span class="step-number" aria-hidden="true">2</span><div><h3>Open it &amp; play</h3><p>Launch Mayhem Companion from setup or its shortcut, then open League in borderless or windowed mode. The M tray icon has an optional <strong>Start with League</strong> setting.</p></div></li>
         </ol>
         <div class="install-bottom">
           <a class="text-link" href="https://github.com/MrMegaMango/mayhem-companion#start">Full setup &amp; troubleshooting <span aria-hidden="true">↗</span></a>
-          <span>No standalone installer yet.</span>
+          <span>Free · Installs for your Windows account</span>
+        </div>
+        <div class="install-help">
+          <details>
+            <summary>Installation help <span aria-hidden="true">+</span></summary>
+            <div class="details-copy">
+              <p>This installer is not code-signed, so Windows may show an unknown-publisher warning. Download it only from this project’s GitHub release.</p>
+              <p>Automatic augment reading uses Windows’ English OCR language feature. If it is unavailable, add English OCR in Windows language settings; manual augment lookup remains available.</p>
+              <p>Can’t see the panel? Click the M icon in the Windows tray or press <strong>Ctrl+Alt+M</strong>. Automatic launches wait in the tray until a supported game starts.</p>
+              <p>Uninstall from <strong>Windows Settings → Apps → Mayhem Companion</strong>. Your settings and cache remain in <code>%USERPROFILE%\MayhemCompanion</code> unless you remove them yourself.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Manual setup from source <span aria-hidden="true">+</span></summary>
+            <div class="details-copy">
+              <p><a href="https://github.com/MrMegaMango/mayhem-companion/archive/refs/heads/main.zip">Download source ZIP</a> and extract it to a local Windows folder. Install <a href="https://www.python.org/downloads/windows/">Python 3.12 or later</a> with Tk support, then run <code>Setup.ps1</code> with PowerShell.</p>
+              <p>Source setup instructions and developer checks are in the <a href="https://github.com/MrMegaMango/mayhem-companion#start">README</a>.</p>
+            </div>
+          </details>
         </div>
         <p class="install-notice">Riot’s published policy lists augment and Arena-item win-rate displays as unapproved. This prototype is not Riot-approved. <a href="#limitations">Read the limitations.</a></p>
       </div>

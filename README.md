@@ -6,15 +6,42 @@ A personal Windows companion for ARAM Mayhem, Arena and TFT. ARAM mode reads you
 
 ## Start
 
-Run `Setup.ps1` with PowerShell on Windows (Python 3.12+ required). If Windows treats a WSL/network path as an unsigned remote script, copy the project to a local Windows folder before running setup. Open **Mayhem Companion** from the desktop shortcut. Installed files live in `%USERPROFILE%\MayhemCompanion`; the development source can remain in WSL.
+1. [Download for Windows](https://github.com/MrMegaMango/mayhem-companion/releases/latest/download/MayhemCompanionSetup.exe) and run **MayhemCompanionSetup.exe**.
+2. Open **Mayhem Companion** from the installer or its shortcut, then start League in **borderless or windowed** mode.
 
-The companion starts hidden and waits in the background. It appears automatically when you enter **ARAM, ARAM Mayhem or Arena champion select**, or when **TFT starts**, stays available through loading and the match, and hides when the match ends or you leave champion select. Other games and the ordinary lobby do not open it. Custom games are recognized by their actual mode. **Ctrl+Alt+M** opens or hides it manually; hiding it during a match lasts until that match ends. Start with `--browse` to keep manual browsing available outside matches. Closing with × exits the background companion.
+Requires **Windows 10/11, 64-bit**. Python is bundled; no Python or PowerShell setup is needed. The installer runs for your Windows account and installs the app in `%LOCALAPPDATA%\Programs\MayhemCompanion`. Settings, cache and logs stay in `%USERPROFILE%\MayhemCompanion`.
+
+<details>
+<summary>Installation help</summary>
+
+The installer is not code-signed, so Windows may show an unknown-publisher warning. Download it only from this project's GitHub release.
+
+If you previously used the source installation with **Start with League** enabled, turn that setting off and back on from the installed app to switch its startup shortcut to the new executable.
+
+Automatic augment reading requires Windows' **English OCR** language feature. If it is unavailable, add English OCR in Windows language settings; manual augment lookup remains available. Click the **M** tray icon or press **Ctrl+Alt+M** if the panel is hidden.
+
+To uninstall, use **Windows Settings → Apps → Mayhem Companion → Uninstall**. This removes the app and its startup integration. Settings, cache and logs are preserved by default in `%USERPROFILE%\MayhemCompanion`; remove that folder separately if you also want to erase local data.
+
+</details>
+
+<details>
+<summary>Manual setup from source</summary>
+
+[Download the source ZIP](https://github.com/MrMegaMango/mayhem-companion/archive/refs/heads/main.zip), extract it to a local Windows folder, and install **Python 3.12+ with Tk support**. Run `Setup.ps1` with PowerShell, then open **Mayhem Companion** from the desktop shortcut. If Windows treats a WSL/network path as an unsigned remote script, copy the project to a local Windows folder before running setup. Source-installed files live in `%USERPROFILE%\MayhemCompanion`; the development source can remain in WSL.
+
+Source setup accepts `-StartWithLeague` to enable the optional startup watcher. Outside the app, run `cscript //NoLogo Configure-Autostart.vbs "%USERPROFILE%\MayhemCompanion" disable` from the source-installed folder to disable it.
+
+To remove a source installation, disable **Start with League**, close the companion, and delete its desktop shortcut and installed app files. Keep the folder if you want to preserve settings, cache and logs; deleting it removes that local data too.
+
+</details>
+
+The installer and its shortcuts show the panel when you open it. Automatic startup launches stay hidden in the tray until a supported game starts. The panel appears automatically when you enter **ARAM, ARAM Mayhem or Arena champion select**, or when **TFT starts**, stays available through loading and the match, and hides when the match ends or you leave champion select. Other games and the ordinary lobby do not open it automatically. Custom games are recognized by their actual mode. **Ctrl+Alt+M** opens or hides it manually; hiding it during a match lasts until that match ends. Start with `--show` to show it once while keeping automatic game detection, or `--browse` to keep manual browsing available outside matches. Closing with × exits the background companion.
 
 The header's **Auto / ARAM / Arena / TFT** selector follows the detected game by default. Choose a mode to browse its reference manually. All modes use the same tray, League startup watcher and preferred portrait monitor.
 
 The **M icon in the Windows notification area** remains available while the panel is hidden. Click it to show the panel, or right-click for **Show companion**, **Hide companion**, **Send feedback**, **Privacy & usage**, and **Exit**. Showing from the tray also unlocks click-through controls. Windows may place the icon in its hidden-icons menu. Exit removes the icon and stops the background companion.
 
-Turn on **Start with League** in the tray menu to launch automatically when the League client opens. This installs one shortcut in your own Windows Startup folder: a small watcher starts at sign-in, checks League process names every two seconds, and launches the companion once per League session. Exit stays effective for that session; closing and reopening League starts it again. The watcher also counts an active game so a client closing during a match does not trigger another launch. Turn the tray setting off to remove the startup shortcut and stop the watcher. Setup also accepts `-StartWithLeague`. Outside the app, run `cscript //NoLogo Configure-Autostart.vbs "%USERPROFILE%\MayhemCompanion" disable` from the installed folder to disable it.
+Turn on **Start with League** in the tray menu to launch automatically when the League client opens. It is off unless you choose to enable it. This installs one shortcut in your own Windows Startup folder: a small watcher starts at sign-in, checks League process names every two seconds, and launches the companion once per League session. Exit stays effective for that session; closing and reopening League starts it again. The watcher also counts an active game so a client closing during a match does not trigger another launch. Turn the tray setting off to remove the startup shortcut and stop the watcher.
 
 - Use **borderless or windowed** League. Exclusive fullscreen is not supported.
 - Keep **Auto scan** checked. **Auto** champion selection follows your champion during champion select and in game, including champion swaps. Manually choosing a champion also works with automatic augment scanning.
@@ -78,7 +105,7 @@ Screen capture runs only when the League game executable is the visible foregrou
 
 Capture copies the requested rectangle directly through Windows GDI instead of reading both monitors and cropping afterward. The usual title band is 8.75% of the game frame (9.5% for Arena's slightly wider title row); the broader layout fallback is captured only if needed. OCR leaves a 0.35-second pause after an active scan completes, 0.8 seconds between idle/paused scans, and 10 seconds after an OCR error. Disabling Auto scan stops capture/OCR while retaining manual lookups and local game polling.
 
-The app registers modified hotkeys without keyboard hooks. Automatic launch is a per-user Startup shortcut and needs no administrator access. Close with ×. To uninstall, disable **Start with League**, close the companion, and delete its installed folder and desktop shortcut.
+The app registers modified hotkeys without keyboard hooks. Automatic launch is a per-user Startup shortcut and needs no administrator access. Close with ×. For installer versions, uninstall through **Windows Settings → Apps → Mayhem Companion**; settings, cache and logs are preserved by default. For source installations, disable **Start with League**, close the companion, and remove its app files and desktop shortcut as described under [Start](#start).
 
 ## Development and verification
 
