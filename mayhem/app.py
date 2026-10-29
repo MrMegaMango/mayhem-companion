@@ -865,7 +865,8 @@ class Companion:
         self.root.update_idletasks()
         canvas = getattr(self, "build_scroll", None)
         results = getattr(self, "build_results", None)
-        scrolling = canvas is not None and results is not None and self.view.get() == "builds"
+        scrolling = (canvas is not None and results is not None and self.view.get() == "builds"
+                     and getattr(self, "display_mode", "aram") == "aram")
         if scrolling:
             canvas.configure(height=max(120, min(560, results.winfo_reqheight())))
             self.root.update_idletasks()

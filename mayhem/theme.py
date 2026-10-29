@@ -23,6 +23,7 @@ def install(root):
                     bordercolor=BG, lightcolor=FIELD, darkcolor=FIELD,
                     arrowcolor=MUTED, arrowsize=10, width=10)
     style.map("Vertical.TScrollbar", background=[("active", BORDER)])
+    style.configure("Treeview", bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER, relief="flat")
     root.option_add("*TCombobox*Listbox.background", FIELD)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", "#315447")
