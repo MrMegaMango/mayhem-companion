@@ -27,6 +27,10 @@ from .icons import IconLoader
 from .tft_ui import TftPanel
 from .champion_choices import ChampionChoicesPanel
 from .arena_ui import ArenaPanel
+from . import __version__
+from .feedback import (FEEDBACK_EMAIL, build_report, email_draft, feedback_mode,
+                       open_email_draft, technical_details)
+from .feedback_ui import FeedbackDialog
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -61,6 +65,7 @@ class Companion:
         self.events, self.requests = queue.Queue(), queue.Queue()
         self._closed = self.recovery_visible = False
         self._autostart_busy = False
+        self.feedback_dialog = None
         self.stop = threading.Event()
         self.catalog = None
         self.champion = self.live_champion = None
@@ -1024,6 +1029,8 @@ class Companion:
                 self.close()
             elif payload == "toggle_autostart":
                 self.toggle_autostart()
+            elif payload == "feedback":
+                self.show_feedback()
         elif kind == "autostart_result":
             self._autostart_busy = False
             success, enabled = payload
@@ -1304,6 +1311,51 @@ class Companion:
                 url = "https://aramkit.com/en-US/champions/" + slug
         webbrowser.open(url)
 
+    def show_feedback(self):
+        dialog = getattr(self, "feedback_dialog", None)
+        if dialog is not None and dialog.winfo_exists():
+            dialog.deiconify()
+            dialog.lift()
+            dialog.focus_force()
+            return
+        # Freeze the context when the player opens the form. Game polling can
+        # continue without silently changing the report being reviewed.
+        mode = feedback_mode(self.display_mode, self.last_game_context)
+        panel = (self.arena_panel if self.display_mode == "arena" else
+                 self.tft_panel if self.display_mode == "tft" else self)
+        diagnostics = technical_details(
+            game_state=self.last_game_context.get("status", self.game_status), view=panel.view.get(),
+            auto_scan=self.auto.get(), locked=self.locked,
+            portrait=self.settings.get("display_preference") == "portrait")
+
+        def report(category, description, contact, include_diagnostics):
+            return build_report(category, description, contact, include_diagnostics,
+                                mode=mode, diagnostics=diagnostics)
+
+        def submit(category, description, contact, include_diagnostics):
+            text = report(category, description, contact, include_diagnostics)
+            uri, needs_paste = email_draft(category, mode, text)
+            if needs_paste:
+                try:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(text)
+                except tk.TclError:
+                    return False, "Could not copy the long report. Use Review report and copy its text."
+            if not open_email_draft(uri):
+                return False, (f"Could not open an email app. Use Copy report and email it to {FEEDBACK_EMAIL}.")
+            if needs_paste:
+                return True, "Report copied. Paste it into the email draft, then review and send."
+            return True, "Email draft requested. Review and send in your email app; nothing has been sent yet."
+
+        x, y, _ = self.panel_placement(780, self.settings.get("position"))
+        x, y, _ = place_panel(self._last_display, 470, 780, (x, y))
+        self.feedback_dialog = FeedbackDialog(
+            self.root, version=__version__, mode=mode, diagnostics=diagnostics,
+            build_report=report, submit=submit,
+            destination_label=f"To {FEEDBACK_EMAIL}", position=(x, y),
+            work_area=self._last_display["work_area"],
+            screenshot_hint="Attach a screenshot in your email app, if useful.")
+
     def help(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("About Mayhem Companion")
@@ -1351,7 +1403,8 @@ class Companion:
             "Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc."
         )
         self.label(dialog, content, 10, MUTED, wraplength=420, justify="left").pack(padx=20, pady=18)
-        self.button(dialog, "Riot policy", lambda: webbrowser.open(POLICY_URL)).pack(side="left", padx=20)
+        self.button(dialog, "Riot policy", lambda: webbrowser.open(POLICY_URL)).pack(side="left", padx=(20, 8))
+        self.button(dialog, "Send feedback", self.show_feedback).pack(side="left")
         self.button(dialog, "Close", dialog.destroy).pack(side="right", padx=20, pady=10)
 
     def close(self):

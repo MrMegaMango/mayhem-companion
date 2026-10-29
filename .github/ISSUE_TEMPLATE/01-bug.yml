@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a crash, FPS drop, blank panel, or detection problem.
+body:
+  - type: markdown
+    attributes:
+      value: "This report is public. Do not include passwords, League tokens, email addresses, or unreviewed logs. For private feedback, use Send feedback in the app."
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: "Shown in Send feedback"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Game mode
+      options:
+        - ARAM Mayhem
+        - ARAM
+        - Arena
+        - TFT
+        - Outside a game / unknown
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did the companion actually do?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce (optional)
+      description: Include whether the problem happens every time or only sometimes.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshot or reviewed technical details (optional)
+      description: You can paste a screenshot here. Crop or remove any personal information first.

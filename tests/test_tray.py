@@ -85,7 +85,7 @@ class TrayTests(unittest.TestCase):
         tray, icon, events = self.make_tray()
         tray.start()
         self.assertEqual(events.get(timeout=1), ("tray_status", True))
-        for action in ("show", "hide", "toggle_autostart", "exit"):
+        for action in ("show", "hide", "toggle_autostart", "feedback", "exit"):
             icon.actions(action)
             self.assertEqual(events.get(timeout=1), ("tray_action", action))
         self.assertTrue(icon.visible)
@@ -109,7 +109,7 @@ class TrayTests(unittest.TestCase):
         events.get(timeout=1)
         tray.close()
         events.get(timeout=1)
-        for action in ("show", "toggle_autostart"):
+        for action in ("show", "toggle_autostart", "feedback"):
             icon.actions(action)
         self.assertTrue(events.empty())
 
@@ -215,16 +215,16 @@ class TrayTests(unittest.TestCase):
             _native_icon_factory(action)
         options = fake.Icon.call_args.kwargs
         entries = options["menu"].items
-        self.assertEqual([entries[i].text for i in (0, 1, 3, 5)],
-                         ["Show companion", "Hide companion", "Start with League", "Exit"])
+        self.assertEqual([entries[i].text for i in (0, 1, 3, 5, 6)],
+                         ["Show companion", "Hide companion", "Start with League", "Send feedback", "Exit"])
         self.assertTrue(entries[0].default)
         self.assertIs(entries[2], Menu.SEPARATOR)
         self.assertIs(entries[4], Menu.SEPARATOR)
         self.assertIs(entries[3].checked, _autostart_checked)
-        for index in (0, 1, 3, 5):
+        for index in (0, 1, 3, 5, 6):
             entries[index].action(None, None)
         self.assertEqual([call.args[0] for call in action.call_args_list],
-                         ["show", "hide", "toggle_autostart", "exit"])
+                         ["show", "hide", "toggle_autostart", "feedback", "exit"])
         self.assertEqual(options["icon"].size, (64, 64))
 
     def test_autostart_checked_reads_current_configuration_each_time(self):

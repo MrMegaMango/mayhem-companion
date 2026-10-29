@@ -1,0 +1,42 @@
+name: Incorrect stats
+description: Report a statistic that appears incorrect, missing, or out of date.
+body:
+  - type: markdown
+    attributes:
+      value: "This report is public. Do not include credentials or personal information. For private feedback, use Send feedback in the app."
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: "Shown in Send feedback"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Game mode
+      options:
+        - ARAM Mayhem
+        - ARAM
+        - Arena
+        - TFT
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Which statistic looks wrong?
+      description: Include the champion, unit, item, augment, or spell pair and the number shown, if available.
+    validations:
+      required: true
+  - type: textarea
+    id: comparison
+    attributes:
+      label: Source or expected value (optional)
+      description: Include the source link, patch, and any filters used to compare the numbers.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshot (optional)
+      description: You can paste a screenshot here. Crop or remove any personal information first.

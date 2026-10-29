@@ -1,0 +1,33 @@
+name: Suggestion
+description: Suggest an improvement to the companion.
+body:
+  - type: markdown
+    attributes:
+      value: "This report is public. Do not include credentials or personal information. For private feedback, use Send feedback in the app."
+  - type: textarea
+    id: description
+    attributes:
+      label: What would help?
+      description: Describe the problem you want to solve and your suggested improvement.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Relevant mode (optional)
+      options:
+        - All modes / general
+        - ARAM Mayhem
+        - ARAM
+        - Arena
+        - TFT
+  - type: input
+    id: version
+    attributes:
+      label: App version (optional)
+      placeholder: "Shown in Send feedback"
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Example or screenshot (optional)
+      description: Remove any personal information from screenshots before sharing.
