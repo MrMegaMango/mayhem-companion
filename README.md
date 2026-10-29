@@ -1,6 +1,6 @@
 # Mayhem Companion
 
-[Project website](https://mrmegamango.github.io/mayhem-companion/) · [Setup](#start) · [Feedback](#feedback)
+[Project website](https://arammayhem.pages.dev/) · [Setup](#start) · [Feedback](#feedback)
 
 A personal Windows companion for ARAM Mayhem, Arena and TFT. ARAM mode reads your current League champion and visible augment titles, then shows champion-specific augment, item-build and spell-pair win rates from ARAMKit. Arena uses its own champion, augment and individual-item statistics. TFT mode provides composition statistics, unit-specific three-item builds, and augment reference/expert tiers.
 
