@@ -113,12 +113,41 @@ class ArenaPanelTests(unittest.TestCase):
         self.start_live()
         self.panel.set_offers(copy.deepcopy(OFFERS))
         self.assertEqual(self.panel.view.get(), "augments")
-        self.assertEqual(self.panel.cards[0][2].cget("text"), "63.0% Win rate")
-        self.assertEqual(self.panel.cards[1][2].cget("text"), "— Win rate")
+        self.assertEqual(self.panel.cards[0][2].cget("text"), "63.0%")
+        self.assertEqual(self.panel.offer_labels[0].cget("text"), "Win rate")
+        self.assertEqual(self.panel.cards[1][2].cget("text"), "—")
+        self.assertEqual(self.panel.offer_labels[1].cget("text"), "Win rate")
         self.assertEqual(self.panel.cards[1][3].cget("text"), "No champion-specific data")
         self.assertIn("picks/levels not separated", self.panel.detail.get())
         self.panel.set_offers([])
         self.assertEqual(self.panel.view.get(), "items")
+
+    def test_offer_emphasis_preserves_slot_order_and_clears_on_refresh(self):
+        self.start_live()
+        data = copy.deepcopy(DATA)
+        data["augments"].append({"id": "2", "name": "Jeweled Gauntlet",
+                                 "win_rate": .67, "sample_count": 900})
+        self.panel.set_champion_data("157", data)
+        self.panel.set_offers(copy.deepcopy(OFFERS))
+        self.assertEqual([card[1].cget("text") for card in self.panel.cards[:2]],
+                         ["Goliath", "Jeweled Gauntlet"])
+        self.assertEqual(self.panel.offer_badges[0].cget("text"), "")
+        self.assertEqual(self.panel.offer_badges[1].cget("text"), "HIGHEST WR")
+        self.panel.retry()
+        self.assertEqual(self.panel.offer_badges[1].cget("text"), "")
+        self.assertEqual(self.panel.cards[1][2].cget("text"), "—")
+
+    def test_sparse_offer_leader_never_highlights_lower_rate(self):
+        self.start_live()
+        data = copy.deepcopy(DATA)
+        data["augments"].append({"id": "2", "name": "Jeweled Gauntlet",
+                                 "win_rate": .67, "sample_count": 90})
+        self.panel.set_champion_data("157", data)
+        self.panel.set_offers(copy.deepcopy(OFFERS))
+        self.assertEqual([label.cget("text") for label in self.panel.offer_badges[:2]], ["", ""])
+        self.assertIn("LOW SAMPLE", self.panel.cards[1][3].cget("text"))
+        self.panel.set_offers([OFFERS[0]])
+        self.assertEqual(self.panel.offer_badges[0].cget("text"), "")
 
     def test_manual_tab_survives_reroll_and_offer_disappearance(self):
         self.start_live()

@@ -1,6 +1,6 @@
 ; Compile from the repository with packaging/build.py or ISCC /D overrides.
 #ifndef AppVersion
-  #define AppVersion "0.7.0"
+  #define AppVersion "0.8.0"
 #endif
 #ifndef BundleDir
   #error BundleDir must point to the complete PyInstaller onedir bundle.

@@ -7,8 +7,7 @@ from tkinter import ttk
 import webbrowser
 
 
-BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
-TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
+from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
 
 def _number(value):
@@ -79,32 +78,33 @@ class ChampionChoicesPanel(tk.Frame):
         self._build()
         self._render()
 
-    def _label(self, parent, variable, color=MUTED, size=8, **kwargs):
-        return tk.Label(parent, textvariable=variable, bg=BG, fg=color,
-                        font=("Segoe UI", size), **kwargs)
+    def _label(self, parent, variable, color=MUTED, size=9, bold=False, **kwargs):
+        return tk.Label(parent, textvariable=variable, bg=parent.cget("bg"), fg=color,
+                        font=("Segoe UI", size, "bold" if bold else "normal"), **kwargs)
 
     def _build(self):
         heading = tk.Frame(self, bg=BG)
-        heading.pack(fill="x", pady=(0, 4))
-        self._label(heading, self.title, TEXT, 9, anchor="w").pack(side="left")
+        heading.pack(fill="x", pady=(2, 9))
+        self._label(heading, self.title, TEXT, 11, bold=True, anchor="w").pack(side="left")
         self._label(heading, self.status, MUTED, 8, anchor="e").pack(side="right")
         style = ttk.Style(self)
         style.configure("Choices.Treeview", background=PANEL, fieldbackground=PANEL,
-                        foreground=TEXT, rowheight=40, borderwidth=0, font=("Segoe UI", 10))
-        style.configure("Choices.Treeview.Heading", background=FIELD, foreground=MUTED,
-                        borderwidth=0, relief="flat", font=("Segoe UI", 8))
-        style.map("Choices.Treeview", background=[("selected", "#31495d")],
+                        foreground=TEXT, rowheight=48, borderwidth=0, font=("Segoe UI", 11))
+        style.configure("Choices.Treeview.Heading", background=PANEL, foreground=MUTED,
+                        borderwidth=0, relief="flat", padding=(8, 8), font=("Segoe UI", 8, "bold"))
+        style.map("Choices.Treeview", background=[("selected", FIELD)],
                   foreground=[("selected", TEXT)])
-        table = tk.Frame(self, bg=BG)
+        table = tk.Frame(self, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
         table.pack(fill="x")
         self.tree = ttk.Treeview(table, columns=("win", "games"), show="tree headings",
                                 selectmode="none", style="Choices.Treeview", height=1)
-        self.tree.heading("#0", text="Champion", anchor="w")
-        self.tree.heading("win", text="Win % ↓", anchor="e")
-        self.tree.heading("games", text="Games", anchor="e")
-        self.tree.column("#0", width=225, minwidth=135, stretch=True, anchor="w")
+        self.tree.heading("#0", text="CHAMPION", anchor="w")
+        self.tree.heading("win", text="WIN % ↓", anchor="e")
+        self.tree.heading("games", text="GAMES", anchor="e")
+        self.tree.column("#0", width=222, minwidth=135, stretch=True, anchor="w")
         self.tree.column("win", width=65, minwidth=60, stretch=False, anchor="e")
         self.tree.column("games", width=85, minwidth=75, stretch=False, anchor="e")
+        self.tree.tag_configure("highest", background="#16342f", font=("Segoe UI", 11, "bold"))
         self.tree.tag_configure("current", foreground=ACCENT)
         self.tree.tag_configure("low_sample", foreground=AMBER)
         self.tree.pack(side="left", fill="x", expand=True)
@@ -114,7 +114,7 @@ class ChampionChoicesPanel(tk.Frame):
         self.tree.bind("<Map>", lambda _: self._schedule(self._visible_icons))
         self.source_label = self._label(self, self.source, anchor="w", justify="left",
                                         wraplength=398, cursor="hand2")
-        self.source_label.pack(fill="x", pady=(4, 0))
+        self.source_label.pack(fill="x", pady=(8, 0))
         self.source_label.bind("<Button-1>", lambda _: self.open_source())
         self.note_label = self._label(self, self.note, anchor="w", justify="left", wraplength=398)
 
@@ -228,6 +228,8 @@ class ChampionChoicesPanel(tk.Frame):
         self.title.set("Available champions" + (f" · {len(self.rows)}" if self.rows else ""))
         self.tree.configure(height=max(1, min(5, len(self.rows))))
         low_sample, missing = False, False
+        rates = [_rate(row) for row in self.rows if _rate(row) is not None]
+        highest = max(rates) if len(rates) > 1 else None
         for row in self.rows:
             ident = str(row["champion_id"])
             iid = "c:" + ident
@@ -235,7 +237,13 @@ class ChampionChoicesPanel(tk.Frame):
             low_sample = low_sample or low
             missing = missing or win == "—"
             current = ident == self.current_id
-            tags = ("current",) if current else ("low_sample",) if low else ()
+            tags = []
+            if highest is not None and _rate(row) == highest and (_count(row.get("sample_count")) or 0) >= 200:
+                tags.append("highest")
+            if low:
+                tags.append("low_sample")
+            elif current:
+                tags.append("current")
             self.tree.insert("", "end", iid=iid, text=("● " if current else "") + str(row["name"]),
                              values=(win, count), tags=tags)
             url = row.get("icon_url") or row.get("icon")

@@ -100,6 +100,27 @@ class PanelTests(unittest.TestCase):
         self.assertIn("Fewer than 200 games", self.panel.note.get())
         self.assertIn("No rate", self.panel.note.get())
 
+    def test_low_sample_leader_does_not_highlight_a_lower_rate(self):
+        self.panel.set_context([1, 2, 3], 2, NAMES)
+        self.panel.set_data(copy.deepcopy(DATA))
+        self.assertIn("low_sample", self.item(2)["tags"])
+        self.assertNotIn("highest", self.item(2)["tags"])
+        self.assertNotIn("highest", self.item(1)["tags"])
+        self.assertEqual(self.item(2)["text"], "● Olaf")
+
+    def test_highlight_requires_multiple_observations_and_clears_with_rates(self):
+        self.panel.set_context([1, 2, 3], 1, NAMES)
+        data = copy.deepcopy(DATA)
+        data["rows"][1].update(sample_count=500, low_sample=False)
+        self.panel.set_data(data)
+        self.assertIn("highest", self.item(2)["tags"])
+        self.assertNotIn("highest", self.item(1)["tags"])
+        self.panel.set_error("Offline")
+        self.assertNotIn("highest", self.item(2)["tags"])
+        self.panel.set_context([1, 3], 1, NAMES)
+        self.panel.set_data(data)
+        self.assertNotIn("highest", self.item(1)["tags"])
+
     def test_current_champion_change_preserves_rates_for_same_id_set(self):
         self.panel.set_context([1, 2, 3], 1, NAMES)
         self.panel.set_data(copy.deepcopy(DATA))

@@ -8,8 +8,7 @@ import webbrowser
 
 from .data import resolve_champion_id
 
-BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
-TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
+from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
 
 def number(value):
@@ -87,19 +86,19 @@ class ArenaPanel(tk.Frame):
         self.detail = tk.StringVar()
         self.variant = tk.StringVar()
         row = tk.Frame(self, bg=BG)
-        row.pack(fill="x", pady=(0, 8))
-        self.champion_box = ttk.Combobox(row, textvariable=self.champion_name, font=("Segoe UI", 15), width=19)
+        row.pack(fill="x", pady=(0, 12))
+        self.champion_box = ttk.Combobox(row, textvariable=self.champion_name, font=("Segoe UI", 16, "bold"), width=19)
         self.champion_box.pack(side="left", fill="x", expand=True)
         self.champion_box.bind("<<ComboboxSelected>>", self.select_champion)
         self.champion_box.bind("<Return>", self.select_champion)
         self.champion_box.bind("<KeyRelease>", self.filter_champions)
         self.button(row, "Auto", self.follow_game).pack(side="right", padx=(6, 0))
-        tabs = tk.Frame(self, bg=BG)
-        tabs.pack(fill="x", pady=(0, 8))
+        tabs = tk.Frame(self, bg=PANEL, padx=3, pady=3)
+        tabs.pack(fill="x", pady=(0, 12))
         self.tabs = {}
         for key, title in (("champions", "Champions"), ("augments", "Augments"), ("items", "Items")):
             self.tabs[key] = self.button(tabs, title, lambda key=key: self.switch_view(key))
-            self.tabs[key].pack(side="left", expand=True, fill="x")
+            self.tabs[key].pack(side="left", expand=True, fill="x", padx=1)
         controls = tk.Frame(self, bg=BG)
         self.controls = controls
         controls.pack(fill="x", pady=(0, 8))
@@ -111,31 +110,48 @@ class ArenaPanel(tk.Frame):
         sort.pack(side="right", padx=(6, 0))
         sort.bind("<<ComboboxSelected>>", lambda _: self.render())
         self.offer_frame = tk.Frame(self, bg=BG)
-        self.cards = []
-        for _ in range(3):
-            frame = tk.Frame(self.offer_frame, bg=PANEL, padx=10, pady=8)
-            frame.pack(fill="x", pady=(0, 6))
-            name = self.label(frame, "", 11, bold=True, anchor="w", wraplength=370)
+        self.cards, self.offer_labels, self.offer_badges = [], [], []
+        for index in range(3):
+            frame = tk.Frame(self.offer_frame, bg=PANEL, padx=14, pady=12,
+                             highlightbackground=BORDER, highlightthickness=1)
+            frame.pack(fill="x", pady=(0, 10))
+            top = tk.Frame(frame, bg=PANEL)
+            top.pack(fill="x", pady=(0, 6))
+            self.label(top, f"CHOICE {index + 1}", 8, color=MUTED, bold=True).pack(side="left")
+            badge = self.label(top, "", 8, color=ACCENT, bold=True)
+            badge.pack(side="right")
+            name = self.label(frame, "", 13, bold=True, anchor="w", wraplength=365, justify="left")
             name.pack(fill="x")
-            value = self.label(frame, "", 18, bold=True, anchor="w")
-            value.pack(fill="x", pady=(3, 0))
-            note = self.label(frame, "", 9, color=MUTED, anchor="w", wraplength=370, justify="left")
-            note.pack(fill="x")
+            metric_row = tk.Frame(frame, bg=PANEL)
+            metric_row.pack(fill="x", pady=(5, 0))
+            value = self.label(metric_row, "", 30, bold=True, anchor="w")
+            value.pack(side="left")
+            caption = self.label(metric_row, "", 9, color=MUTED)
+            caption.pack(side="left", anchor="s", padx=(9, 0), pady=(0, 7))
+            note = self.label(frame, "", 9, color=MUTED, anchor="w", wraplength=365, justify="left")
+            note.pack(fill="x", pady=(3, 0))
             self.cards.append((frame, name, value, note))
-        self.table_frame = tk.Frame(self, bg=BG)
+            self.offer_labels.append(caption)
+            self.offer_badges.append(badge)
+        self.table_frame = tk.Frame(self, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
         style = ttk.Style(self)
-        style.configure("Arena.Treeview", rowheight=40, background=PANEL, fieldbackground=PANEL,
-                        foreground=TEXT, borderwidth=0, font=("Segoe UI", 9))
-        style.configure("Arena.Treeview.Heading", background=FIELD, foreground=TEXT, font=("Segoe UI", 9))
+        style.configure("Arena.Treeview", rowheight=46, background=PANEL, fieldbackground=PANEL,
+                        foreground=TEXT, borderwidth=0, font=("Segoe UI", 10))
+        style.configure("Arena.Treeview.Heading", background=PANEL, foreground=MUTED,
+                        relief="flat", padding=(6, 8), font=("Segoe UI", 8, "bold"))
+        style.map("Arena.Treeview", background=[("selected", FIELD)], foreground=[("selected", TEXT)])
         style.configure("Arena.TEntry", fieldbackground=FIELD, foreground=TEXT, insertcolor=TEXT)
         self.search.configure(style="Arena.TEntry")
         self.tree = ttk.Treeview(self.table_frame, style="Arena.Treeview", columns=("win", "first", "games"),
                                  show="tree headings", height=7, selectmode="browse")
         self.tree.heading("#0", text="Champion")
-        self.tree.column("#0", width=173, minwidth=120, stretch=True)
-        for key, title, width in (("win", "Win rate", 78), ("first", "1st", 50), ("games", "Games", 68)):
+        self.tree.column("#0", width=168, minwidth=105, stretch=True)
+        for key, title, width in (("win", "Win rate", 78), ("first", "1ST", 50), ("games", "GAMES", 82)):
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, minwidth=width, stretch=False, anchor="e")
+        self.tree.tag_configure("highest", background="#16342f", font=("Segoe UI", 10, "bold"))
+        self.tree.tag_configure("low_sample", foreground=AMBER)
+        self.tree.tag_configure("current", foreground=ACCENT)
         self.tree.pack(side="left", fill="both", expand=True)
         self.scrollbar = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
         self.scrollbar.pack(side="right", fill="y")
@@ -174,8 +190,8 @@ class ArenaPanel(tk.Frame):
     @staticmethod
     def button(parent, text, command):
         return tk.Button(parent, text=text, command=command, bg=FIELD, fg=TEXT, bd=0,
-                         activebackground="#35475f", activeforeground=TEXT, padx=8, pady=6,
-                         font=("Segoe UI", 9), cursor="hand2")
+                         activebackground=BORDER, activeforeground=TEXT, padx=10, pady=8,
+                         font=("Segoe UI", 10), cursor="hand2", highlightthickness=0)
 
     def set_loading(self):
         self.message.set("Loading Arena data…")
@@ -334,7 +350,9 @@ class ArenaPanel(tk.Frame):
     def render(self):
         view = self.view.get()
         for key, button in self.tabs.items():
-            button.configure(bg=FIELD if key == view else BG)
+            button.configure(bg=FIELD if key == view else PANEL,
+                             fg=ACCENT if key == view else MUTED,
+                             font=("Segoe UI", 10, "bold" if key == view else "normal"))
         label = self.metadata()
         self.detail.set("")
         self.offer_frame.pack_forget()
@@ -343,16 +361,24 @@ class ArenaPanel(tk.Frame):
             self.controls.pack_forget()
             self.offer_frame.pack(fill="x", before=self.detail_label)
             rates = {str(row["id"]): row for row in (self.data or {}).get("augments", [])}
+            observed = [metric(rates.get(str(offer["id"]), {}), "win_rate") for offer in self.offers]
+            observed = [rate for rate in observed if rate is not None]
+            highest = max(observed) if len(observed) > 1 else None
             for index, (frame, title, value, note) in enumerate(self.cards):
                 if index >= len(self.offers):
                     frame.pack_forget()
                     continue
-                frame.pack(fill="x", pady=(0, 6))
+                frame.pack(fill="x", pady=(0, 10))
                 offer = self.offers[index]
                 row = rates.get(str(offer["id"]), {})
                 title.configure(text=offer["name"])
-                value.configure(text=f"{formatted(row, 'win_rate')} {label}")
                 count = metric(row, "sample_count")
+                leading = (highest is not None and metric(row, "win_rate") == highest
+                           and count is not None and count >= 200)
+                value.configure(text=formatted(row, "win_rate"), fg=ACCENT if leading else TEXT)
+                frame.configure(highlightbackground=ACCENT if leading else BORDER)
+                self.offer_labels[index].configure(text=label)
+                self.offer_badges[index].configure(text="HIGHEST WR" if leading else "")
                 if count:
                     summary = f"{formatted(row, 'sample_count')} games"
                     if metric(row, "first_rate") is not None:
@@ -370,11 +396,13 @@ class ArenaPanel(tk.Frame):
             self.rows = ordered_rows(rows, self.query.get(), self.sort.get())
             show_first = any(metric(row, "first_rate") is not None for row in rows)
             self.tree.configure(displaycolumns=("win", "first", "games") if show_first else ("win", "games"))
-            self.tree.column("#0", width=190 if show_first else 240)
+            self.tree.column("#0", width=168 if show_first else 218)
             self.tree.delete(*self.tree.get_children())
             self.icon_rows = {}
             self.tree.heading("#0", text={"champions": "All champions", "items": "Item", "augments": "Augment"}[view])
             self.tree.configure(height=max(2, min(7, len(self.rows))))
+            observed = [metric(row, "win_rate") for row in self.rows if metric(row, "win_rate") is not None]
+            highest = max(observed) if len(observed) > 1 and self.sort.get() == "Win rate" else None
             for index, row in enumerate(self.rows):
                 item = str(index)
                 options = {}
@@ -389,8 +417,16 @@ class ArenaPanel(tk.Frame):
                     self.icon_rows.setdefault(url, []).append(item)
                 count = metric(row, "sample_count")
                 name = row.get("name", str(row.get("id", "")))
+                tags = []
+                if highest is not None and metric(row, "win_rate") == highest and count is not None and count >= 200:
+                    tags.append("highest")
+                if count and count < 200:
+                    tags.append("low_sample")
                 if view == "champions" and str(row.get("id")) == self.live_champion:
                     name = "● " + name
+                    if not (count and count < 200):
+                        tags.append("current")
+                options["tags"] = tags
                 self.tree.insert("", "end", iid=item, text=name, values=(formatted(row, "win_rate"),
                                  formatted(row, "first_rate"), formatted(row, "sample_count") + ("*" if count and count < 200 else "")), **options)
             if not self.rows:

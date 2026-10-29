@@ -34,8 +34,8 @@ from .analytics import Analytics
 from .analytics_ui import AnalyticsDialog
 from urllib.parse import urlsplit
 
-BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
-TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
+from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
+from .theme import install as install_theme
 POLICY_URL = "https://developer.riotgames.com/docs/lol#game-policy"
 
 
@@ -152,18 +152,20 @@ class Companion:
     def button(self, parent, text, command, color=FIELD):
         return tk.Button(parent, text=text, command=command, bg=color, fg=TEXT,
                          activebackground="#35475f", activeforeground=TEXT,
-                         bd=0, padx=10, pady=5, font=("Segoe UI", 9), cursor="hand2")
+                         bd=0, padx=10, pady=7, font=("Segoe UI", 10), cursor="hand2",
+                         highlightthickness=0)
 
     def build(self):
         root = self.root
         root.title("Mayhem Companion")
         root.configure(bg=BG)
+        style = install_theme(root)
         root.overrideredirect(os.environ.get("MAYHEM_QA_CAPTURE") != "1")
         root.attributes("-topmost", True)
         root.attributes("-alpha", 1.0)
         x, y, height = self.panel_placement(610, self.settings.get("position"))
         root.geometry(f"440x{height}+{x}+{y}")
-        self.shell = tk.Frame(root, bg=BG, highlightbackground="#35465f", highlightthickness=1)
+        self.shell = tk.Frame(root, bg=BG, highlightbackground=BORDER, highlightthickness=1)
         self.shell.pack(fill="both", expand=True)
         header = tk.Frame(self.shell, bg=BG)
         header.pack(fill="x", padx=16, pady=(12, 8))
@@ -172,7 +174,7 @@ class Companion:
         brand.pack(side="left")
         self.mode_choice = tk.StringVar(value="Auto")
         mode_box = ttk.Combobox(header, textvariable=self.mode_choice, state="readonly",
-                               values=["Auto", "ARAM", "Arena", "TFT"], width=6)
+                               values=["Auto", "ARAM", "Arena", "TFT"], width=6, style="Quiet.TCombobox")
         mode_box.pack(side="left", padx=(10, 0))
         mode_box.bind("<<ComboboxSelected>>", lambda _: self.change_game_mode())
         self.badge = self.label(header, "WAITING", 8, MUTED)
@@ -189,27 +191,33 @@ class Companion:
         champ_row = tk.Frame(self.body, bg=BG)
         champ_row.pack(fill="x", pady=(0, 7))
         self.champ_var = tk.StringVar(value="Auto detect champion")
-        self.champ_box = ttk.Combobox(champ_row, textvariable=self.champ_var, font=("Segoe UI", 15), width=20)
+        self.champ_box = ttk.Combobox(champ_row, textvariable=self.champ_var, font=("Segoe UI", 17), width=20, style="Champion.TCombobox")
         self.champ_box.pack(side="left", fill="x", expand=True)
         self.champ_box.bind("<<ComboboxSelected>>", self.select_champion)
         self.champ_box.bind("<Return>", self.select_champion)
         self.champ_box.bind("<KeyRelease>", self.filter_champions)
         self.button(champ_row, "Auto", self.auto_champion).pack(side="right", padx=(8, 0))
-        tabs = tk.Frame(self.body, bg=BG)
+        tabs = tk.Frame(self.body, bg=PANEL, padx=3, pady=3)
         tabs.pack(fill="x", pady=(0, 8))
         self.view = tk.StringVar(value="augments")
         self.augment_tab = self.button(tabs, "Augments", lambda: self.switch_view("augments"), FIELD)
         self.augment_tab.pack(side="left", fill="x", expand=True)
-        self.builds_tab = self.button(tabs, "Builds", lambda: self.switch_view("builds"), BG)
+        self.augment_tab.configure(fg=ACCENT)
+        self.builds_tab = self.button(tabs, "Builds", lambda: self.switch_view("builds"), PANEL)
         self.builds_tab.pack(side="left", fill="x", expand=True)
-        self.spells_tab = self.button(tabs, "Spells", lambda: self.switch_view("spells"), BG)
+        self.spells_tab = self.button(tabs, "Spells", lambda: self.switch_view("spells"), PANEL)
         self.spells_tab.pack(side="left", fill="x", expand=True)
         self.pages = tk.Frame(self.body, bg=BG)
         self.pages.pack(fill="both", expand=True)
         self.augment_panel = tk.Frame(self.pages, bg=BG)
         self.augment_panel.pack(fill="both", expand=True)
-        controls = tk.Frame(self.augment_panel, bg=BG)
-        controls.pack(fill="x", pady=(0, 10))
+        choices_header = tk.Frame(self.augment_panel, bg=BG)
+        choices_header.pack(fill="x", pady=(0, 6))
+        self.label(choices_header, "AUGMENT CHOICES", 8, MUTED, True).pack(side="left")
+        self.options_button = self.button(choices_header, "Options ▾", self.toggle_augment_options, BG)
+        self.options_button.configure(fg=MUTED, font=("Segoe UI", 9), pady=4)
+        self.options_button.pack(side="right")
+        controls = self.augment_options = tk.Frame(self.augment_panel, bg=BG)
         self.stage = tk.StringVar(value="All picks")
         stage_box = ttk.Combobox(controls, textvariable=self.stage, state="readonly", width=10,
                                 values=["All picks", "Pick 1", "Pick 2", "Pick 3", "Pick 4"])
@@ -221,37 +229,43 @@ class Companion:
                        selectcolor=FIELD, font=("Segoe UI", 9)).pack(side="left", padx=10)
         self.lock_button = self.button(controls, "Lock", self.toggle_lock)
         self.lock_button.pack(side="right")
-        style = ttk.Style(root)
-        style.theme_use("clam")
-        style.configure("TCombobox", fieldbackground=FIELD, background=FIELD,
-                        foreground=TEXT, arrowcolor=MUTED, bordercolor=FIELD,
-                        lightcolor=FIELD, darkcolor=FIELD, padding=6)
-        style.map("TCombobox", fieldbackground=[("readonly", FIELD)],
-                  foreground=[("readonly", TEXT)], selectbackground=[("!disabled", FIELD)],
-                  selectforeground=[("!disabled", TEXT)])
-        root.option_add("*TCombobox*Listbox.background", FIELD)
-        root.option_add("*TCombobox*Listbox.foreground", TEXT)
-        root.option_add("*TCombobox*Listbox.selectBackground", "#36516a")
-        root.option_add("*TCombobox*Listbox.font", "{Segoe UI} 10")
         for index in range(3):
-            card = tk.Frame(self.augment_panel, bg=PANEL, padx=12, pady=10)
+            card = tk.Frame(self.augment_panel, bg=PANEL, padx=13, pady=11,
+                            highlightbackground=BORDER, highlightthickness=1)
             card.pack(fill="x", pady=(0, 8))
             top = tk.Frame(card, bg=PANEL)
             top.pack(fill="x")
-            self.label(top, "•", 10, MUTED).pack(side="left", padx=(0, 8))
+            self.label(top, f"{index + 1:02d}", 9, MUTED).pack(side="left", padx=(0, 9))
             name = tk.StringVar(value="")
-            box = ttk.Combobox(top, textvariable=name, font=("Segoe UI", 11), width=29)
-            box.pack(side="left", fill="x", expand=True)
+            title = tk.StringVar(value="Waiting for choice")
+            name.trace_add("write", lambda *_, n=name, t=title: t.set(n.get() or "Waiting for choice"))
+            self.label(top, size=12, color=TEXT, bold=True, textvariable=title,
+                       wraplength=278, anchor="w", justify="left").pack(side="left", fill="x", expand=True)
+            edit = self.button(top, "Edit", lambda i=index: self.edit_augment(i), PANEL)
+            edit.configure(fg=MUTED, font=("Segoe UI", 9), padx=4, pady=2)
+            edit.pack(side="right")
+            editor = tk.Frame(card, bg=PANEL)
+            box = ttk.Combobox(editor, textvariable=name, font=("Segoe UI", 11), width=29)
+            box.pack(fill="x")
             box.bind("<<ComboboxSelected>>", lambda _, i=index: self.select_augment(i))
             box.bind("<Return>", lambda _, i=index: self.select_augment(i))
             box.bind("<KeyRelease>", lambda e, i=index: self.filter_augments(e, i))
+            box.bind("<Escape>", lambda _, i=index: self.edit_augment(i, False))
             row = tk.Frame(card, bg=PANEL)
-            row.pack(fill="x", pady=(4, 0))
-            value = self.label(row, "—", 25, TEXT, True)
-            value.pack(side="left")
-            metadata = self.label(row, "Choose an augment", 9, MUTED, anchor="e", justify="right")
-            metadata.pack(side="right", fill="x", expand=True)
-            self.cards.append({"var": name, "box": box, "value": value, "meta": metadata})
+            row.pack(fill="x", pady=(9, 0))
+            metric = tk.Frame(row, bg=PANEL)
+            metric.pack(side="left")
+            value = self.label(metric, "—", 30, TEXT, True)
+            value.pack(anchor="w")
+            self.label(metric, "WIN RATE", 8, MUTED).pack(anchor="w")
+            detail = tk.Frame(row, bg=PANEL)
+            detail.pack(side="right", fill="x", expand=True)
+            rank = self.label(detail, "", 8, ACCENT, True, anchor="e")
+            rank.pack(fill="x", pady=(0, 5))
+            metadata = self.label(detail, "Choose an augment", 9, MUTED, anchor="e", justify="right")
+            metadata.pack(fill="x")
+            self.cards.append({"var": name, "box": box, "value": value, "meta": metadata,
+                               "frame": card, "editor": editor, "metric_row": row, "rank": rank})
         self.build_spells(style)
         self.build_items()
         self.status = tk.StringVar(value="Loading augment data…")
@@ -263,11 +277,10 @@ class Companion:
         link = self.label(footer, size=8, color=MUTED, textvariable=self.source, cursor="hand2", anchor="w")
         link.pack(fill="x")
         link.bind("<Button-1>", lambda _: self.open_source())
-        buttons = tk.Frame(footer, bg=BG)
-        buttons.pack(fill="x", pady=(6, 0))
-        self.button(buttons, "Clear", self.clear_offers).pack(side="left")
-        self.button(buttons, "Retry data", lambda: self.requests.put(("retry", None))).pack(side="left", padx=6)
-        self.label(buttons, "Ctrl+Alt+M  show / hide", 8, MUTED).pack(side="right")
+        more = self.button(footer, "More ▾", self.show_more, BG)
+        more.configure(fg=MUTED, font=("Segoe UI", 9), padx=0, pady=4)
+        more.pack(anchor="e", pady=(2, 0))
+        self.more_button = more
         self.tft_panel = TftPanel(self.shell, lambda: self.load_tft(force=True),
                                   on_resize=lambda: self.root.after_idle(self.fit_window),
                                   request_icon=self.request_tft_icon, request_items=self.load_tft_items)
@@ -279,6 +292,49 @@ class Companion:
         root.update_idletasks()
         x, y, height = self.panel_placement(self.shell.winfo_reqheight(), (x, y))
         root.geometry(f"440x{height}+{x}+{y}")
+
+    def toggle_augment_options(self):
+        if self.augment_options.winfo_manager():
+            self.augment_options.pack_forget()
+            self.options_button.configure(text="Options ▾")
+        else:
+            self.augment_options.pack(fill="x", pady=(0, 10), before=self.cards[0]["frame"])
+            self.options_button.configure(text="Options ▴")
+        self.fit_window()
+
+    def edit_augment(self, index, opened=None):
+        card = self.cards[index]
+        if "editor" not in card:
+            return
+        editor = card["editor"]
+        opened = not bool(editor.winfo_manager()) if opened is None else opened
+        if opened:
+            editor.pack(fill="x", pady=(8, 0), before=card["metric_row"])
+            card["box"].focus_set()
+            card["box"].selection_range(0, "end")
+        else:
+            editor.pack_forget()
+        self.fit_window()
+
+    def show_more(self):
+        menu = tk.Menu(self.root, tearoff=False, bg=FIELD, fg=TEXT,
+                       activebackground=BORDER, activeforeground=TEXT, font=("Segoe UI", 10))
+        menu.add_command(label="Clear choices", command=self.clear_offers)
+        menu.add_command(label="Refresh data", command=lambda: self.requests.put(("retry", None)))
+        menu.add_separator()
+        menu.add_command(label="Help & shortcuts", command=self.help)
+        menu.add_command(label="Send feedback", command=self.show_feedback)
+        try:
+            menu.tk_popup(self.more_button.winfo_rootx(),
+                          self.more_button.winfo_rooty() + self.more_button.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def reset_augment_emphasis(self):
+        for card in self.cards:
+            if "rank" in card:
+                card["rank"].configure(text="")
+                card["frame"].configure(highlightbackground=BORDER)
 
     def request_tft_icon(self, url):
         photo = self.item_images.get(url)
@@ -384,6 +440,7 @@ class Companion:
             query = self.cards[index]["var"].get().casefold()
             self.cards[index]["box"]["values"] = [n for n in self.augment_names if query in n.casefold()]
             self.offer_ids[index] = None
+            self.reset_augment_emphasis()
             self.cards[index]["value"].configure(text="—", fg=TEXT)
             self.cards[index]["meta"].configure(text="Press Enter or select a match", fg=MUTED)
             self.token += 1
@@ -427,8 +484,11 @@ class Companion:
         if ident:
             self.cards[index]["var"].set(self.catalog["augments"][ident]["name"])
         self.lookup()
+        if ident:
+            self.edit_augment(index, False)
 
     def lookup(self):
+        self.reset_augment_emphasis()
         self.lookup_spells()
         self.lookup_builds()
         self.token += 1
@@ -459,9 +519,9 @@ class Companion:
         self.label(self.spell_panel, size=9, color=MUTED, textvariable=self.spell_summary,
                    wraplength=398, justify="left", anchor="w").pack(fill="x", pady=(0, 8))
         style.configure("Spells.Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT,
-                        borderwidth=0, rowheight=40, font=("Segoe UI", 9))
+                        borderwidth=0, rowheight=44, font=("Segoe UI", 10))
         style.configure("Spells.Treeview.Heading", background=FIELD, foreground=MUTED,
-                        font=("Segoe UI", 8), relief="flat")
+                        font=("Segoe UI", 9), relief="flat")
         style.map("Spells.Treeview", background=[("selected", "#30425b")], foreground=[("selected", TEXT)])
         table = tk.Frame(self.spell_panel, bg=BG)
         table.pack(fill="both", expand=True)
@@ -533,10 +593,21 @@ class Companion:
         self.build_summary = tk.StringVar(value="Choose a champion to see core builds.")
         self.label(self.build_panel, size=9, color=MUTED, textvariable=self.build_summary,
                    wraplength=398, anchor="w", justify="left").pack(fill="x", pady=(0, 8))
-        self.build_context_panel = tk.Frame(self.build_panel, bg=BG)
+        viewport = tk.Frame(self.build_panel, bg=BG)
+        viewport.pack(fill="both", expand=True)
+        self.build_scroll = tk.Canvas(viewport, bg=BG, bd=0, highlightthickness=0, height=360, width=1)
+        self.build_scroll.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(viewport, orient="vertical", command=self.build_scroll.yview)
+        scrollbar.pack(side="right", fill="y", padx=(4, 0))
+        self.build_scroll.configure(yscrollcommand=scrollbar.set)
+        self.build_results = tk.Frame(self.build_scroll, bg=BG)
+        window = self.build_scroll.create_window((0, 0), window=self.build_results, anchor="nw")
+        self.build_scroll.bind("<Configure>", lambda event: self.build_scroll.itemconfigure(window, width=event.width))
+        self.build_results.bind("<Configure>", lambda _: self.build_scroll.configure(scrollregion=self.build_scroll.bbox("all")))
+        self.build_context_panel = tk.Frame(self.build_results, bg=BG)
         order_bar = tk.Frame(self.build_context_panel, bg=BG)
         order_bar.pack(fill="x", pady=(0, 6))
-        self.label(order_bar, "Core purchase order", 8, MUTED).pack(side="left")
+        self.label(order_bar, "Core order", 8, MUTED).pack(side="left")
         self.build_order = tk.StringVar(value="")
         self.build_order_box = ttk.Combobox(order_bar, textvariable=self.build_order,
                                            state="readonly", width=23)
@@ -555,35 +626,47 @@ class Companion:
             name.pack(fill="x", pady=(3, 0))
             self.build_core_items.append({"icon": icon, "name": name, "icon_url": None})
         for _ in range(5):
-            frame = tk.Frame(self.build_panel, bg=PANEL, padx=12, pady=9)
+            frame = tk.Frame(self.build_results, bg=PANEL, padx=10, pady=10,
+                             highlightbackground=BORDER, highlightthickness=1)
             top = tk.Frame(frame, bg=PANEL)
             top.pack(fill="x")
             rate = tk.Frame(top, bg=PANEL)
-            rate.pack(side="right", anchor="n", padx=(8, 0))
-            value = self.label(rate, "—", 21, TEXT, True)
+            rate.pack(side="right", anchor="center", padx=(8, 0))
+            value = self.label(rate, "—", 27, TEXT, True)
             value.pack(anchor="e")
             self.label(rate, "WIN RATE", 7, MUTED).pack(anchor="e")
             items_panel = tk.Frame(top, bg=PANEL)
-            items_panel.pack(side="left", fill="x", expand=True)
+            items_panel.pack(side="left", fill="both", expand=True)
             items = []
             for _ in range(3):
                 item_row = tk.Frame(items_panel, bg=PANEL)
-                item_row.pack(fill="x", pady=2)
+                item_row.pack(side="left", fill="both", expand=True, padx=2)
                 icon_frame = tk.Frame(item_row, bg=FIELD, width=36, height=36)
-                icon_frame.pack(side="left", padx=(0, 7))
+                icon_frame.pack()
                 icon_frame.pack_propagate(False)
                 icon = tk.Label(icon_frame, bg=FIELD, bd=0)
                 icon.pack(fill="both", expand=True)
-                name = self.label(item_row, size=9, color=TEXT, wraplength=190, anchor="w", justify="left")
-                name.pack(side="left", fill="x", expand=True)
-                items.append({"frame": item_row, "icon": icon, "name": name, "icon_url": None})
+                name = self.label(item_row, size=8, color=TEXT, wraplength=78, anchor="center", justify="center")
+                name.pack(fill="x", pady=(4, 0))
+                items.append({"frame": item_row, "icon_frame": icon_frame, "icon": icon, "name": name, "icon_url": None})
             meta = self.label(frame, size=8, color=MUTED, wraplength=374, anchor="w", justify="left")
-            meta.pack(fill="x", pady=(5, 0))
+            meta.pack(fill="x", pady=(8, 0))
             self.build_cards.append({"frame": frame, "items": items, "value": value, "meta": meta})
         self.build_note = tk.StringVar(value="")
         self.build_note_label = self.label(self.build_panel, size=8, color=MUTED,
                                           textvariable=self.build_note, wraplength=398, anchor="w", justify="left")
-        self.build_note_label.pack(fill="x", side="bottom", pady=(7, 0))
+        self.build_note_label.pack(fill="x", side="bottom", pady=(9, 0))
+        pending = [self.build_scroll]
+        while pending:
+            widget = pending.pop()
+            widget.bind("<MouseWheel>", self.scroll_build_results, add="+")
+            pending.extend(widget.winfo_children())
+
+    def scroll_build_results(self, event):
+        canvas = getattr(self, "build_scroll", None)
+        if canvas is not None and event.delta and canvas.yview() != (0.0, 1.0):
+            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+            return "break"
 
     def switch_view(self, view, *, automatic=False):
         self.view_automatic = automatic
@@ -593,9 +676,12 @@ class Companion:
         self.build_panel.pack_forget()
         {"augments": self.augment_panel, "spells": self.spell_panel,
          "builds": self.build_panel}[view].pack(fill="both", expand=True)
-        self.augment_tab.configure(bg=FIELD if view == "augments" else BG)
-        self.spells_tab.configure(bg=FIELD if view == "spells" else BG)
-        self.builds_tab.configure(bg=FIELD if view == "builds" else BG)
+        self.augment_tab.configure(bg=FIELD if view == "augments" else PANEL,
+                                   fg=ACCENT if view == "augments" else MUTED)
+        self.spells_tab.configure(bg=FIELD if view == "spells" else PANEL,
+                                   fg=ACCENT if view == "spells" else MUTED)
+        self.builds_tab.configure(bg=FIELD if view == "builds" else PANEL,
+                                   fg=ACCENT if view == "builds" else MUTED)
         if view == "spells":
             self.lookup_spells()
             self.render_spells()
@@ -701,7 +787,8 @@ class Companion:
                     urls = core.get("item_icon_urls", [])
                     self.render_build_item(item, f"{index + 1}. {core['item_names'][index]}",
                                            urls[index] if index < len(urls) else None)
-                self.build_context_panel.pack(fill="x", pady=(0, 10), before=self.build_note_label)
+                context_options = {} if getattr(self, "build_results", None) is not None else {"before": self.build_note_label}
+                self.build_context_panel.pack(fill="x", pady=(0, 10), **context_options)
                 catalog = self.build_data.get("item_catalog", {})
                 owned_ids = {catalog.get(item_id, {}).get("canonical_id", item_id) for item_id in self.live_items}
                 rows = [row for row in route.get("later_items", [])
@@ -726,7 +813,14 @@ class Companion:
                     if index >= len(row["item_names"]):
                         item["frame"].pack_forget()
                         continue
-                    item["frame"].pack(fill="x", pady=2)
+                    if "icon_frame" in item:
+                        single = len(row["item_names"]) == 1
+                        item["frame"].pack(side="left", fill="both", expand=True, padx=2)
+                        item["icon_frame"].pack_configure(side="left" if single else "top", padx=(0, 8) if single else 0)
+                        item["name"].pack_configure(side="left" if single else "top", fill="x", expand=single, pady=0 if single else (4, 0))
+                        item["name"].configure(wraplength=170 if single else 78, anchor="w" if single else "center", justify="left" if single else "center")
+                    else:
+                        item["frame"].pack(fill="x", pady=2)
                     url = urls[index] if index < len(urls) else None
                     self.render_build_item(item, row["item_names"][index], url)
                 card["value"].configure(text=f"{rate * 100:.1f}%" if rate is not None and count else "—")
@@ -737,7 +831,8 @@ class Companion:
                 if low:
                     parts.append("LOW SAMPLE")
                 card["meta"].configure(text=" · ".join(parts), fg=AMBER if low else MUTED)
-                card["frame"].pack(fill="x", pady=(0, 7), before=self.build_note_label)
+                card_options = {} if getattr(self, "build_results", None) is not None else {"before": self.build_note_label}
+                card["frame"].pack(fill="x", pady=(0, 8), **card_options)
             self.build_note.set(("Per-item rates after the core order shown · filtered sample."
                                  if later else "Core item sets · filtered sample · not purchase order.")
                                 + (" Cached data." if self.build_data.get("stale") else ""))
@@ -768,8 +863,19 @@ class Companion:
 
     def fit_window(self):
         self.root.update_idletasks()
-        x, y, height = self.panel_placement(self.shell.winfo_reqheight(),
-                                           (self.root.winfo_x(), self.root.winfo_y()))
+        canvas = getattr(self, "build_scroll", None)
+        results = getattr(self, "build_results", None)
+        scrolling = canvas is not None and results is not None and self.view.get() == "builds"
+        if scrolling:
+            canvas.configure(height=max(120, min(560, results.winfo_reqheight())))
+            self.root.update_idletasks()
+        natural = self.shell.winfo_reqheight()
+        position = (self.root.winfo_x(), self.root.winfo_y())
+        x, y, height = self.panel_placement(natural, position)
+        if scrolling and natural > height:
+            canvas.configure(height=max(80, canvas.winfo_reqheight() - (natural - height)))
+            self.root.update_idletasks()
+            x, y, height = self.panel_placement(self.shell.winfo_reqheight(), position)
         self.root.geometry(f"440x{height}+{x}+{y}")
 
     def cancel_placement_check(self):
@@ -1294,6 +1400,10 @@ class Companion:
             self.render_builds()
 
     def render_rates(self, rates):
+        self.reset_augment_emphasis()
+        observed = [rate for rate in rates if rate and rate.get("win_rate") is not None
+                    and rate.get("sample_count", 0)]
+        highest = max((rate["win_rate"] for rate in observed), default=None)
         metadata = next((rate for rate in rates if rate), None)
         if metadata and self.view.get() == "augments":
             self.update_source(metadata)
@@ -1311,6 +1421,11 @@ class Companion:
                     qualifier += " · cached"
                 card["meta"].configure(text=f"{compact_count(count)} games\n{qualifier}",
                                        fg=AMBER if count < 200 or rate.get("stale") else MUTED)
+
+                if ("rank" in card and len(observed) > 1 and count >= 200
+                        and value == highest):
+                    card["rank"].configure(text="HIGHEST WR")
+                    card["frame"].configure(highlightbackground=ACCENT)
 
     def open_source(self):
         url = "https://aramkit.com/en-US/augments"

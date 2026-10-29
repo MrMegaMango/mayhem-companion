@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 import queue
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 from mayhem.app import Companion
+from mayhem.theme import ACCENT, BORDER, MUTED, TEXT
 
 
 class StateTests(unittest.TestCase):
@@ -51,7 +52,8 @@ class StateTests(unittest.TestCase):
         app.offers_active = True
         app.view_automatic = True
         app.offer_ids = ["1", "2", "3"]
-        app.cards = [{"var": Mock(), "value": Mock(), "meta": Mock()} for _ in range(3)]
+        app.cards = [{"var": Mock(), "value": Mock(), "meta": Mock(),
+                      "rank": Mock(), "frame": Mock()} for _ in range(3)]
         app.spell_token = 7
         app.spell_champion = "157"
         app.spell_data = None
@@ -611,7 +613,7 @@ class StateTests(unittest.TestCase):
         self.assertIsNone(app.champion)
         self.assertEqual(app.offer_ids, [None, None, None])
         for card in app.cards:
-            card["value"].configure.assert_called_with(text="—", fg="#edf4ff")
+            card["value"].configure.assert_called_with(text="—", fg=TEXT)
 
     def test_champion_select_resolves_id_opens_spells_and_fetches_before_game(self):
         app = self.make_view()
@@ -698,8 +700,73 @@ class StateTests(unittest.TestCase):
         app = self.make_view()
         app.render_rates([{"win_rate": None, "sample_count": 0},
                           {"win_rate": 0.0, "sample_count": 20}, None])
-        app.cards[0]["value"].configure.assert_called_with(text="—", fg="#9aacc4")
-        app.cards[1]["value"].configure.assert_called_with(text="0.0%", fg="#edf4ff")
+        app.cards[0]["value"].configure.assert_called_with(text="—", fg=MUTED)
+        app.cards[1]["value"].configure.assert_called_with(text="0.0%", fg=TEXT)
+
+    def test_highest_rate_emphasis_requires_a_comparison_and_sufficient_sample(self):
+        for counts, expected in (((500, 600, 700), [0]), ((199, 600, 700), []),
+                                 ((500, 0, 0), [])):
+            with self.subTest(counts=counts):
+                app = self.make_view()
+                app.render_rates([{"win_rate": rate, "sample_count": count}
+                                  for rate, count in zip((.80, .60, .55), counts)])
+                emphasized = [i for i, card in enumerate(app.cards)
+                              if card["rank"].configure.call_args.kwargs.get("text") == "HIGHEST WR"]
+                self.assertEqual(emphasized, expected)
+                for i, card in enumerate(app.cards):
+                    card["frame"].configure.assert_called_with(
+                        highlightbackground=ACCENT if i in expected else BORDER)
+
+    def test_new_lookup_clears_old_winner_before_replacement_rates_arrive(self):
+        app = self.make_view()
+        app.stage.get.return_value = "All picks"
+        app.render_rates([{"win_rate": .60, "sample_count": 500},
+                          {"win_rate": .55, "sample_count": 500}, None])
+        app.lookup()
+        for card in app.cards:
+            card["rank"].configure.assert_called_with(text="")
+            card["frame"].configure.assert_called_with(highlightbackground=BORDER)
+        self.assertEqual(app.requests.get_nowait(), ("lookup", (6, "157", ["1", "2", "3"], None)))
+
+    def test_manual_edit_clears_comparison_and_rejects_pending_rates(self):
+        app = self.make_view()
+        app.augment_names = ["Goliath", "Tank Engine"]
+        app.cards[1]["var"].get.return_value = "tank"
+        app.cards[1]["box"] = MagicMock()
+        app.render_rates([{"win_rate": .60, "sample_count": 500},
+                          {"win_rate": .55, "sample_count": 500}, None])
+        app.filter_augments(Mock(keysym="k"), 1)
+        self.assertEqual(app.offer_ids, ["1", None, "3"])
+        self.assertEqual(app.token, 6)
+        self.assertFalse(app.view_automatic)
+        for card in app.cards:
+            card["rank"].configure.assert_called_with(text="")
+            card["frame"].configure.assert_called_with(highlightbackground=BORDER)
+        app.render_rates = Mock()
+        app.handle_event("rates", (5, [{"win_rate": .99, "sample_count": 500}]))
+        app.render_rates.assert_not_called()
+
+    def test_confirmed_manual_augment_requests_rates_and_closes_editor(self):
+        app = self.make_view()
+        app.cards[0]["var"].get.return_value = " goliath "
+        app.catalog["augments"] = {"1": {"name": "Goliath"}}
+        app.augment_by_name = {"goliath": "1"}
+        app.lookup, app.edit_augment = Mock(), Mock()
+        app.select_augment(0)
+        self.assertEqual(app.offer_ids, ["1", "2", "3"])
+        self.assertFalse(app.is_auto_offer)
+        app.cards[0]["var"].set.assert_called_once_with("Goliath")
+        app.lookup.assert_called_once()
+        app.edit_augment.assert_called_once_with(0, False)
+
+    def test_unmatched_manual_augment_stays_open_for_correction(self):
+        app = self.make_view()
+        app.cards[0]["var"].get.return_value = "golia"
+        app.augment_by_name = {"goliath": "1"}
+        app.lookup, app.edit_augment = Mock(), Mock()
+        app.select_augment(0)
+        self.assertIsNone(app.offer_ids[0])
+        self.assertNotIn(call(0, False), app.edit_augment.call_args_list)
 
     def test_champion_change_fetches_spells_without_any_augment_selected(self):
         app = self.make_view()

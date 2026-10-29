@@ -6,8 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 import webbrowser
 
-BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
-TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
+from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 VIEWS = (("comps", "Comps"), ("items", "Item builds"), ("augments", "Augments"))
 SORT_KEYS = {"Average place": "avg_place", "Top 4": "top4_rate",
              "1st place": "first_rate", "Games": "games"}
@@ -153,20 +152,21 @@ class TftPanel(tk.Frame):
     @staticmethod
     def button(parent, text, command, color=FIELD):
         return tk.Button(parent, text=text, command=command, bg=color, fg=TEXT,
-                         activebackground="#35475f", activeforeground=TEXT, bd=0,
-                         padx=9, pady=5, font=("Segoe UI", 9), cursor="hand2")
+                         activebackground=BORDER, activeforeground=TEXT, bd=0, relief="flat",
+                         highlightthickness=0, padx=10, pady=7, font=("Segoe UI", 10), cursor="hand2")
 
     def _build(self):
-        tabs = tk.Frame(self, bg=BG)
-        tabs.pack(fill="x", pady=(0, 8))
+        tabs = tk.Frame(self, bg=PANEL, padx=3, pady=3)
+        tabs.pack(fill="x", pady=(0, 12))
         self.tabs = {}
         for key, title in VIEWS:
             button = self.button(tabs, title, lambda v=key: self.switch_view(v),
-                                 FIELD if key == "comps" else BG)
-            button.pack(side="left", fill="x", expand=True)
+                                 FIELD if key == "comps" else PANEL)
+            button.configure(fg=ACCENT if key == "comps" else MUTED)
+            button.pack(side="left", fill="x", expand=True, padx=1)
             self.tabs[key] = button
         self.unit_frame = tk.Frame(self, bg=BG)
-        self.label(self.unit_frame, "Unit", 9, MUTED).pack(side="left", padx=(0, 8))
+        self.label(self.unit_frame, "Unit", 10, MUTED).pack(side="left", padx=(0, 8))
         self.unit_box = ttk.Combobox(self.unit_frame, textvariable=self.unit_choice,
                                      font=("Segoe UI", 11))
         self.unit_box.pack(side="left", fill="x", expand=True)
@@ -174,17 +174,22 @@ class TftPanel(tk.Frame):
         self.unit_box.bind("<Return>", self._select_unit)
         self.unit_box.bind("<KeyRelease>", self._unit_edited)
         search_row = self.search_row = tk.Frame(self, bg=BG)
-        search_row.pack(fill="x", pady=(0, 6))
-        self.search = tk.Entry(search_row, textvariable=self.query, bg=FIELD, fg=TEXT,
-                               insertbackground=TEXT, relief="flat", font=("Segoe UI", 11))
-        self.search.pack(side="left", fill="x", expand=True, ipady=6)
+        search_row.pack(fill="x", pady=(0, 9))
+        search_field = tk.Frame(search_row, bg=FIELD, highlightbackground=BORDER,
+                                highlightthickness=1, padx=9)
+        search_field.pack(side="left", fill="x", expand=True)
+        self.label(search_field, "Find", 9, MUTED).pack(side="left", padx=(0, 8))
+        self.search = tk.Entry(search_field, textvariable=self.query, bg=FIELD, fg=TEXT,
+                               insertbackground=ACCENT, relief="flat", bd=0, width=12,
+                               highlightthickness=0, font=("Segoe UI", 11))
+        self.search.pack(side="left", fill="x", expand=True, ipady=7)
         self.search.bind("<KeyRelease>", self._search_changed)
         self.search.bind("<Escape>", lambda _: self._clear_search())
         self.button(search_row, "×", self._clear_search).pack(side="left", padx=(4, 0))
         self.compare_button = self.button(search_row, "Compare 3", self.toggle_compare)
         options = tk.Frame(self, bg=BG)
         options.pack(fill="x", pady=(0, 6))
-        self.result_count = self.label(options, "Loading…", 9, MUTED, anchor="w")
+        self.result_count = self.label(options, "Loading…", 10, MUTED, anchor="w")
         self.result_count.pack(side="left", fill="x", expand=True)
         self.sort_box = ttk.Combobox(options, textvariable=self.sort, state="readonly",
                                      values=["Source order"], width=14, font=("Segoe UI", 9))
@@ -192,14 +197,19 @@ class TftPanel(tk.Frame):
         self.sort_box.bind("<<ComboboxSelected>>", lambda _: self.render_list())
         style = ttk.Style(self)
         style.configure("Tft.Treeview", background=PANEL, fieldbackground=PANEL,
-                        foreground=TEXT, rowheight=38, borderwidth=0, font=("Segoe UI", 10))
-        style.map("Tft.Treeview", background=[("selected", "#31495d")],
-                  foreground=[("selected", TEXT)])
-        self.list_frame = tk.Frame(self, bg=BG)
+                        foreground=TEXT, rowheight=44, borderwidth=0, relief="flat",
+                        font=("Segoe UI", 10))
+        style.layout("Tft.Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+        style.map("Tft.Treeview", background=[("selected", FIELD)],
+                  foreground=[("selected", ACCENT)])
+        self.list_frame = tk.Frame(self, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
         self.list_frame.pack(fill="x", pady=(0, 8))
-        self.tree = ttk.Treeview(self.list_frame, show="tree", height=4,
+        self.tree = ttk.Treeview(self.list_frame, columns=("metric",), show="tree", height=3,
                                  selectmode="browse", style="Tft.Treeview")
-        self.tree.column("#0", width=350, stretch=True)
+        self.tree.column("#0", width=245, minwidth=140, stretch=True)
+        self.tree.column("metric", width=92, minwidth=72, stretch=False, anchor="e")
+        self.tree.tag_configure("alternate", background=BG)
+        self.tree.tag_configure("low_sample", foreground=AMBER)
         self.tree.pack(side="left", fill="x", expand=True)
         self.tree_scroll = ttk.Scrollbar(self.list_frame, orient="vertical", command=self.tree.yview)
         self.tree_scroll.pack(side="right", fill="y")
@@ -211,7 +221,7 @@ class TftPanel(tk.Frame):
         for index in range(3):
             row = tk.Frame(self.offer_frame, bg=BG)
             row.pack(fill="x", pady=(0, 4))
-            self.label(row, str(index + 1), 9, MUTED).pack(side="left", padx=(0, 6))
+            self.label(row, f"{index + 1:02}", 10, MUTED, True).pack(side="left", padx=(0, 9))
             variable = tk.StringVar()
             box = ttk.Combobox(row, textvariable=variable, font=("Segoe UI", 10))
             box.pack(side="left", fill="x", expand=True)
@@ -222,7 +232,7 @@ class TftPanel(tk.Frame):
             self.offer_boxes.append(box)
         self.detail_outer = tk.Frame(self, bg=BG)
         self.detail_outer.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(self.detail_outer, bg=BG, height=360,
+        self.canvas = tk.Canvas(self.detail_outer, bg=BG, height=310,
                                 highlightthickness=0, bd=0)
         self.canvas.pack(side="left", fill="both", expand=True)
         detail_scroll = ttk.Scrollbar(self.detail_outer, orient="vertical", command=self.canvas.yview)
@@ -354,7 +364,8 @@ class TftPanel(tk.Frame):
     def _configure_view(self):
         view = self.view.get()
         for key, button in self.tabs.items():
-            button.configure(bg=FIELD if key == view else BG)
+            button.configure(bg=FIELD if key == view else PANEL,
+                             fg=ACCENT if key == view else MUTED)
         self.compare_button.pack_forget()
         if view == "augments":
             self.compare_button.pack(side="right", padx=(6, 0))
@@ -420,13 +431,20 @@ class TftPanel(tk.Frame):
         self.result_count.configure(text=f"{len(self.visible_rows)} {dict(VIEWS)[self.view.get()].lower()}")
         selected = None
         for index, row in enumerate(self.visible_rows):
-            iid, suffix = str(index), ""
+            iid, summary = str(index), ""
             metrics = metric_values(row)
-            if metrics["avg_place"] != "—":
-                suffix = f"  ·  {metrics['avg_place']} avg"
+            if self.view.get() == "items" and metrics["first_rate"] != "—":
+                summary = f"{metrics['first_rate']} 1st"
+            elif metrics["avg_place"] != "—":
+                summary = f"{metrics['avg_place']} avg"
             elif row.get("tier"):
-                suffix = f"  ·  {row['tier']} tier"
-            self.tree.insert("", "end", iid=iid, text=str(row.get("name", "Unnamed")) + suffix)
+                summary = f"{row['tier']} tier"
+            tags = ["alternate"] if index % 2 else []
+            count = _number(row.get("games"))
+            if count is not None and 0 < count < 200:
+                tags.append("low_sample")
+            self.tree.insert("", "end", iid=iid, text=str(row.get("name", "Unnamed")),
+                             values=(summary,), tags=tags)
             url = row.get("icon_url") or row.get("unit", {}).get("icon_url")
             if url:
                 self.tree_icons[iid] = url
@@ -480,8 +498,9 @@ class TftPanel(tk.Frame):
         self._bind_wheel(self.detail)
 
     def _card(self, row):
-        card = tk.Frame(self.detail, bg=PANEL, padx=10, pady=9)
-        card.pack(fill="x", pady=(0, 7))
+        card = tk.Frame(self.detail, bg=PANEL, padx=13, pady=12,
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill="x", pady=(0, 10))
         heading = tk.Frame(card, bg=PANEL)
         heading.pack(fill="x")
         icon_url = row.get("icon_url") or row.get("unit", {}).get("icon_url")
@@ -491,21 +510,30 @@ class TftPanel(tk.Frame):
         if self.view.get() == "items":
             unit = row.get("unit") or (self.item_data or {}).get("unit") or {}
             title = f"{unit['name']} · Item build" if unit.get("name") else "Item build"
-        self.label(heading, title, 12, TEXT, True,
-                   wraplength=285, justify="left", anchor="w").pack(side="left", fill="x", expand=True)
+        self.label(heading, title, 13, TEXT, True,
+                   wraplength=245 if row.get("tier") else 285, justify="left", anchor="w").pack(side="left", fill="x", expand=True)
         if row.get("tier"):
-            self.label(heading, str(row["tier"]), 15, ACCENT, True).pack(side="right", padx=(6, 0))
+            tier = tk.Frame(heading, bg=FIELD, padx=9, pady=5)
+            tier.pack(side="right", padx=(8, 0))
+            self.label(tier, "EXPERT TIER", 7, MUTED, True).pack()
+            self.label(tier, str(row["tier"]), 23, ACCENT, True).pack()
         metrics = metric_values(row)
         if any(metrics[key] != "—" for key in ("avg_place", "top4_rate", "first_rate", "games")):
             metric_row = tk.Frame(card, bg=PANEL)
-            metric_row.pack(fill="x", pady=(9, 3))
-            for index, (key, title) in enumerate((("avg_place", "Avg place ↓"), ("top4_rate", "Top 4"),
-                                                 ("first_rate", "1st place"), ("games", "Games"))):
+            metric_row.pack(fill="x", pady=(13, 5))
+            primary = "first_rate" if self.view.get() == "items" else "avg_place"
+            labels = {"avg_place": "Avg place ↓", "top4_rate": "Top 4", "first_rate": "1st place"}
+            keys = [primary] + [key for key in labels if key != primary]
+            for index, key in enumerate(keys):
                 cell = tk.Frame(metric_row, bg=PANEL)
                 cell.grid(row=0, column=index, sticky="nsew")
                 metric_row.columnconfigure(index, weight=1)
-                self.label(cell, metrics[key], 16, ACCENT if key == "avg_place" else TEXT, True).pack()
-                self.label(cell, title, 8, MUTED).pack()
+                self.label(cell, metrics[key], 27 if index == 0 else 17,
+                           ACCENT if index == 0 else TEXT, True).pack(anchor="w")
+                self.label(cell, labels[key], 9, MUTED).pack(anchor="w")
+            if metrics["games"] != "—":
+                self.label(card, f"{metrics['games']} games", 9, MUTED,
+                           anchor="w").pack(fill="x", pady=(3, 3))
         if self.view.get() == "comps" and row.get("units"):
             self._tiles(card, self._resolve(row["units"], "units"), columns=5)
         elif self.view.get() == "items" and row.get("items"):
@@ -523,7 +551,7 @@ class TftPanel(tk.Frame):
         if low_sample:
             note = (note + " · " if note else "") + "LOW SAMPLE"
         if note:
-            self.label(card, str(note), 8, AMBER if low_sample else MUTED, wraplength=350,
+            self.label(card, str(note), 9, AMBER if low_sample else MUTED, wraplength=350,
                        anchor="w", justify="left").pack(fill="x", pady=(4, 0))
         traits = row.get("traits", [])
         if traits:
@@ -531,7 +559,7 @@ class TftPanel(tk.Frame):
             self.label(card, " · ".join(names), 9, ACCENT, wraplength=350,
                        anchor="w", justify="left").pack(fill="x", pady=(7, 0))
         if row.get("description") and row.get("scope") not in ("comp_archetype", "unit_three_item_build"):
-            self.label(card, str(row["description"]), 9, MUTED, wraplength=350,
+            self.label(card, str(row["description"]), 10, TEXT, wraplength=350,
                        anchor="w", justify="left").pack(fill="x", pady=(7, 0))
         return card
 
@@ -550,16 +578,17 @@ class TftPanel(tk.Frame):
 
     def _tiles(self, parent, items, columns=5):
         grid = tk.Frame(parent, bg=PANEL)
-        grid.pack(fill="x", pady=(8, 3))
+        grid.pack(fill="x", pady=(11, 5))
         for column in range(columns):
             grid.columnconfigure(column, weight=1, uniform="tiles")
         for index, item in enumerate(items):
-            tile = tk.Frame(grid, bg=PANEL)
-            tile.grid(row=index // columns, column=index % columns, sticky="nsew", pady=(0, 7))
+            tile = tk.Frame(grid, bg=FIELD if columns == 3 else PANEL, padx=3, pady=6)
+            tile.grid(row=index // columns, column=index % columns, sticky="nsew",
+                      padx=2 if columns == 3 else 0, pady=(0, 6))
             self._icon(tile, item.get("icon_url")).pack()
-            self.label(tile, str(item.get("name", "")), 8, TEXT,
+            self.label(tile, str(item.get("name", "")), 9 if columns == 3 else 8, TEXT,
                        wraplength=100 if columns == 3 else 64,
-                       justify="center").pack(fill="x", pady=(2, 0))
+                       justify="center").pack(fill="x", pady=(5, 0))
             if item.get("items"):
                 names = [i.get("name", "") if isinstance(i, dict) else str(i) for i in item["items"]]
                 self.label(tile, " · ".join(names), 7, MUTED, wraplength=64).pack(fill="x")
