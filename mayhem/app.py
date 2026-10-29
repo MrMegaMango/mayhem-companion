@@ -26,6 +26,7 @@ from .tray import TrayIcon
 from .icons import IconLoader
 from .tft_ui import TftPanel
 from .champion_choices import ChampionChoicesPanel
+from .arena_ui import ArenaPanel
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -104,6 +105,9 @@ class Companion:
         self.tft_item_token = 0
         self.tft_unit = None
         self.tft_loaded = self.tft_pending = False
+        self.arena_token = self.arena_champion_token = 0
+        self.arena_champion = None
+        self.arena_pending = False
         self.build()
         self.icons = IconLoader(self.events, self.stop, self.storage / "cache" / "icons")
         self.icons.start()
@@ -148,7 +152,7 @@ class Companion:
         brand.pack(side="left")
         self.mode_choice = tk.StringVar(value="Auto")
         mode_box = ttk.Combobox(header, textvariable=self.mode_choice, state="readonly",
-                               values=["Auto", "ARAM", "TFT"], width=6)
+                               values=["Auto", "ARAM", "Arena", "TFT"], width=6)
         mode_box.pack(side="left", padx=(10, 0))
         mode_box.bind("<<ComboboxSelected>>", lambda _: self.change_game_mode())
         self.badge = self.label(header, "WAITING", 8, MUTED)
@@ -247,6 +251,11 @@ class Companion:
         self.tft_panel = TftPanel(self.shell, lambda: self.load_tft(force=True),
                                   on_resize=lambda: self.root.after_idle(self.fit_window),
                                   request_icon=self.request_tft_icon, request_items=self.load_tft_items)
+        self.arena_panel = ArenaPanel(self.shell, self.load_arena, self.load_arena_champion,
+                                      on_resize=lambda: self.root.after_idle(self.fit_window),
+                                      request_icon=self.request_tft_icon, scan_variable=self.auto,
+                                      change_scan=self.change_scan,
+                                      request_scan=lambda: self.requests.put(("scan", None)))
         root.update_idletasks()
         x, y, height = self.panel_placement(self.shell.winfo_reqheight(), (x, y))
         root.geometry(f"440x{height}+{x}+{y}")
@@ -272,11 +281,36 @@ class Companion:
         self.tft_unit = unit
         self.requests.put(("tft_items", (self.tft_item_token, unit, force)))
 
+    def load_arena(self, force=False):
+        if self.arena_pending:
+            return
+        self.arena_token += 1
+        self.arena_pending = True
+        self.arena_panel.set_loading()
+        self.requests.put(("arena", (self.arena_token, force)))
+
+    def load_arena_champion(self, champion, force=False):
+        self.arena_champion_token += 1
+        self.arena_champion = str(champion) if champion is not None else None
+        if self.arena_champion is not None:
+            self.requests.put(("arena_champion", (self.arena_champion_token, self.arena_champion, force)))
+
     def set_game_mode(self, mode):
         if mode == self.display_mode:
             return
+        if self.display_mode == "arena":
+            self.arena_panel.handle_game({})
         self.display_mode = mode
-        self.brand.configure(text="TFT" if mode == "tft" else "MAYHEM")
+        self.brand.configure(text={"tft": "TFT", "arena": "ARENA"}.get(mode, "MAYHEM"))
+        self.arena_panel.pack_forget()
+        if mode == "arena":
+            self.body.pack_forget()
+            self.tft_panel.pack_forget()
+            self.arena_panel.pack(fill="both", expand=True, padx=16)
+            self.load_arena()
+            self.requests.put(("scan", None))
+            self.root.after_idle(self.fit_window)
+            return
         if mode == "tft":
             self.body.pack_forget()
             self.tft_panel.pack(fill="both", expand=True, padx=16, pady=(0, 10))
@@ -290,15 +324,18 @@ class Companion:
 
     def change_game_mode(self):
         choice = self.mode_choice.get()
-        mode = "tft" if choice == "TFT" or (choice == "Auto" and
-                   self.last_game_context.get("is_tft") is True) else "aram"
-        self.set_game_mode(mode)
-        if choice != "Auto":
-            self.set_manual_visible(True)
+        if choice == "Auto":
+            mode = ("arena" if self.last_game_context.get("is_arena") is True else
+                    "tft" if self.last_game_context.get("is_tft") is True else "aram")
         else:
+            mode = choice.lower()
+        self.set_game_mode(mode)
+        if choice == "Auto":
             self.visibility_override = None
             self.browse_mode = False
         self.handle_game(self.last_game_context)
+        if choice != "Auto":
+            self.set_manual_visible(True)
 
     def start_drag(self, event):
         self.drag_start = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
@@ -910,9 +947,11 @@ class Companion:
         active_phases = ("ChampSelect", "GameStart", "InProgress", "Reconnect")
         in_match = (game.get("status") in ("champ_select", "live", "tft")
                     or phase in active_phases)
-        visible = (game.get("is_aram") is True or game.get("is_tft") is True) and in_match
+        visible = (game.get("is_aram") is True or game.get("is_tft") is True
+                   or game.get("is_arena") is True) and in_match
         confirmed = (type(game.get("is_aram")) is bool
                      or type(game.get("is_tft")) is bool
+                     or type(game.get("is_arena")) is bool
                      or (phase is not None and phase not in active_phases))
         if confirmed and visible != self.auto_visible:
             # A manual hide lasts through this match; a manual show outside a
@@ -975,6 +1014,7 @@ class Companion:
                     item["icon"].configure(image=photo)
             self.tft_panel.on_icon(url, photo)
             self.choice_panel.on_icon(url, photo)
+            self.arena_panel.on_icon(url, photo)
         elif kind == "tray_action":
             if payload == "show":
                 self.show_from_tray()
@@ -1007,13 +1047,39 @@ class Companion:
             previous_spell_token, previous_build_token = self.spell_token, self.build_token
             if self.last_game_context:
                 self.handle_game(self.last_game_context)
-            if refreshing or self.spell_token == previous_spell_token:
+            if self.display_mode == "aram" and (refreshing or self.spell_token == previous_spell_token):
                 self.lookup_spells(force=True)
-            if refreshing or self.build_token == previous_build_token:
+            if self.display_mode == "aram" and (refreshing or self.build_token == previous_build_token):
                 self.lookup_builds(force=True)
             self.update_champion_choices(self.last_game_context, force=refreshing)
         elif kind == "game":
             self.handle_game(payload)
+        elif kind == "arena":
+            token, data = payload
+            if token == self.arena_token:
+                self.arena_pending = False
+                self.arena_panel.set_catalog(data)
+        elif kind == "arena_error":
+            token, error = payload
+            if token == self.arena_token:
+                self.arena_pending = False
+                self.arena_panel.set_error(str(error)[:220])
+        elif kind == "arena_champion":
+            token, champion, data = payload
+            if (token == self.arena_champion_token and str(champion) == self.arena_champion
+                    and str(data.get("champion_id")) == self.arena_champion):
+                self.arena_panel.set_champion_data(champion, data)
+        elif kind == "arena_champion_error":
+            token, champion, error = payload
+            if token == self.arena_champion_token and str(champion) == self.arena_champion:
+                self.arena_panel.set_champion_error(champion, error)
+        elif kind == "arena_offers":
+            token, offers = payload
+            if self.display_mode == "arena" and token == self.arena_token and self.auto.get():
+                self.arena_panel.set_offers(offers)
+        elif kind == "arena_scan_status":
+            if self.display_mode == "arena" and self.auto.get():
+                self.arena_panel.message.set(str(payload)[:220])
         elif kind == "champions":
             token, data = payload
             if self.choice_active and token == self.choice_token:
@@ -1042,7 +1108,7 @@ class Companion:
             if token == self.tft_item_token and unit == self.tft_unit:
                 self.tft_panel.set_items_error(unit, str(error)[:180])
         elif kind == "offers":
-            if self.display_mode == "tft":
+            if self.display_mode != "aram":
                 return
             previously_active = self.offers_active
             if not payload:
@@ -1122,9 +1188,23 @@ class Companion:
         if self.mode_choice.get() == "Auto":
             if game.get("is_tft") is True:
                 self.set_game_mode("tft")
+            elif game.get("is_arena") is True:
+                self.set_game_mode("arena")
             elif game.get("is_aram") is True or game.get("is_tft") is False:
                 self.set_game_mode("aram")
         self.update_champion_choices(game)
+        if self.display_mode == "arena":
+            self.arena_panel.handle_game(game)
+            active = game.get("is_arena") is True and game.get("status") in ("champ_select", "live")
+            self.game_status = "arena" if active else "waiting"
+            self.game_live = self.champ_select = self.champion_preview = False
+            self.last_active_status = None
+            self.live_champion = None
+            self.live_items = self.inventory_champion = None
+            self.inventory_current = self.offers_active = False
+            self.badge.configure(text=("SELECT" if game.get("status") == "champ_select" else "LIVE") if active else "BROWSE",
+                                 fg=ACCENT if active else MUTED)
+            return
         if self.display_mode == "tft":
             if game.get("status") == "tft" and self.game_status != "tft":
                 self.load_tft()
@@ -1231,9 +1311,12 @@ class Companion:
         dialog.attributes("-topmost", True)
         content = (
             "Ctrl+Alt+M   Show / hide\nCtrl+Alt+L   Toggle click-through\nCtrl+Alt+S   Resume scanning\n\n"
-            "The panel appears for ARAM and Mayhem champion select and matches, then hides after the match. "
+            "The panel appears for ARAM, Mayhem and Arena champion select and matches, then hides after the match. "
             "Ctrl+Alt+M can open it manually outside a match.\n\n"
-            "The header's Auto / ARAM / TFT selector follows the game or opens either reference manually. "
+            "The header's Auto / ARAM / Arena / TFT selector follows the game or opens a reference manually. "
+            "Arena uses separate champion, augment and individual-item statistics. Its source's win rate "
+            "does not specify the placement cutoff; it is not labeled as first place. Missing pairs stay blank "
+            "and small samples are marked. Arena augment levels are combined by the source.\n\n"
             "TFT appears when a TFT game starts and uses separate TFT data. Comps and items show "
             "average placement, top-four and first-place rates when published. Augment help is an "
             "expert tier/reference lookup, not augment win rates. The displayed queue and rank identify "

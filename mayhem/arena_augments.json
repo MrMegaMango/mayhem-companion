@@ -1,0 +1,2215 @@
+{
+  "source": "Riot game-data English catalog",
+  "version": "16.21.1",
+  "captured_at": "2026-10-28",
+  "reference_only": true,
+  "source_url": "https://raw.communitydragon.org/16.21/plugins/rcp-be-lol-game-data/global/default/v1/cherry-augments.json",
+  "selection": "Non-ARAM reference entries plus explicit CHERRY imports from augment-lists.json; no statistics or eligibility inference.",
+  "augments": {
+    "2087": {
+      "id": "2087",
+      "name": "Archmage",
+      "rarity": "prismatic"
+    },
+    "1418": {
+      "id": "1418",
+      "name": "Crack Open That Egg",
+      "rarity": "silver"
+    },
+    "2099": {
+      "id": "2099",
+      "name": "Rite of Ascension",
+      "rarity": "prismatic"
+    },
+    "2010": {
+      "id": "2010",
+      "name": "Double Tap",
+      "rarity": "prismatic"
+    },
+    "1322": {
+      "id": "1322",
+      "name": "Get Excited!",
+      "rarity": "gold"
+    },
+    "2107": {
+      "id": "2107",
+      "name": "Hellbent",
+      "rarity": "prismatic"
+    },
+    "1001": {
+      "id": "1001",
+      "name": "Titan's Resolve",
+      "rarity": "prismatic"
+    },
+    "2016": {
+      "id": "2016",
+      "name": "Juiced",
+      "rarity": "silver"
+    },
+    "2007": {
+      "id": "2007",
+      "name": "Devil on Your Shoulder",
+      "rarity": "prismatic"
+    },
+    "1324": {
+      "id": "1324",
+      "name": "Protein Shake",
+      "rarity": "prismatic"
+    },
+    "2018": {
+      "id": "2018",
+      "name": "Purist - Caster",
+      "rarity": "silver"
+    },
+    "1405": {
+      "id": "1405",
+      "name": "Speed Demon",
+      "rarity": "silver"
+    },
+    "1413": {
+      "id": "1413",
+      "name": "Stuck In Here With Me",
+      "rarity": "prismatic"
+    },
+    "1320": {
+      "id": "1320",
+      "name": "Upgrade Collector",
+      "rarity": "silver"
+    },
+    "1005": {
+      "id": "1005",
+      "name": "Wee Woo Wee Woo",
+      "rarity": "gold"
+    },
+    "2008": {
+      "id": "2008",
+      "name": "Weighted Popoffs",
+      "rarity": "silver"
+    },
+    "2009": {
+      "id": "2009",
+      "name": "Zealot",
+      "rarity": "silver"
+    },
+    "2062": {
+      "id": "2062",
+      "name": "Echo Cast",
+      "rarity": "prismatic"
+    },
+    "1327": {
+      "id": "1327",
+      "name": "Adamant",
+      "rarity": "silver"
+    },
+    "3118": {
+      "id": "3118",
+      "name": "Arcane Axiom",
+      "rarity": "gold"
+    },
+    "3049": {
+      "id": "3049",
+      "name": "Armored Impact",
+      "rarity": "gold"
+    },
+    "3086": {
+      "id": "3086",
+      "name": "BEES!!!",
+      "rarity": "gold"
+    },
+    "1372": {
+      "id": "1372",
+      "name": "I'm a Baby Kitty Where is Mama",
+      "rarity": "prismatic"
+    },
+    "387": {
+      "id": "387",
+      "name": "Big Dragon Energy",
+      "rarity": "gold"
+    },
+    "3018": {
+      "id": "3018",
+      "name": "Big Shot",
+      "rarity": "prismatic"
+    },
+    "1329": {
+      "id": "1329",
+      "name": "Biggest Snowball Ever",
+      "rarity": "prismatic"
+    },
+    "2128": {
+      "id": "2128",
+      "name": "Combusting Interest",
+      "rarity": "gold"
+    },
+    "3051": {
+      "id": "3051",
+      "name": "Blue Barrier",
+      "rarity": "silver"
+    },
+    "2111": {
+      "id": "2111",
+      "name": "BONK!",
+      "rarity": "gold"
+    },
+    "3048": {
+      "id": "3048",
+      "name": "Bouncing Bees",
+      "rarity": "prismatic"
+    },
+    "3071": {
+      "id": "3071",
+      "name": "Brass Blast",
+      "rarity": "gold"
+    },
+    "2042": {
+      "id": "2042",
+      "name": "Hide on Bush",
+      "rarity": "gold"
+    },
+    "2083": {
+      "id": "2083",
+      "name": "Tooth Fairy",
+      "rarity": "gold"
+    },
+    "2078": {
+      "id": "2078",
+      "name": "Chain Reaction",
+      "rarity": "gold"
+    },
+    "388": {
+      "id": "388",
+      "name": "Chroma Flux",
+      "rarity": "gold"
+    },
+    "377": {
+      "id": "377",
+      "name": "Combination Fried Rice",
+      "rarity": "prismatic"
+    },
+    "3088": {
+      "id": "3088",
+      "name": "CRIMSON COBALT",
+      "rarity": "gold"
+    },
+    "2024": {
+      "id": "2024",
+      "name": "Crit 'n Cast",
+      "rarity": "silver"
+    },
+    "1356": {
+      "id": "1356",
+      "name": "Critical Missile",
+      "rarity": "gold"
+    },
+    "1328": {
+      "id": "1328",
+      "name": "Critical Rhythm",
+      "rarity": "gold"
+    },
+    "2077": {
+      "id": "2077",
+      "name": "Ravenous Bind",
+      "rarity": "gold"
+    },
+    "396": {
+      "id": "396",
+      "name": "Death Dealer",
+      "rarity": "prismatic"
+    },
+    "383": {
+      "id": "383",
+      "name": "Demonic Clasp",
+      "rarity": "gold"
+    },
+    "2063": {
+      "id": "2063",
+      "name": "Dimension Shift",
+      "rarity": "prismatic"
+    },
+    "7014": {
+      "id": "7014",
+      "name": "Ragebait",
+      "rarity": "silver"
+    },
+    "7003": {
+      "id": "7003",
+      "name": "Do or Die",
+      "rarity": "prismatic"
+    },
+    "1384": {
+      "id": "1384",
+      "name": "Donation",
+      "rarity": "gold"
+    },
+    "2131": {
+      "id": "2131",
+      "name": "Don't Change the Channel",
+      "rarity": "silver"
+    },
+    "7002": {
+      "id": "7002",
+      "name": "Don't Stop Cleavin'",
+      "rarity": "gold"
+    },
+    "7008": {
+      "id": "7008",
+      "name": "Doran's Biggest Fan",
+      "rarity": "prismatic"
+    },
+    "2144": {
+      "id": "2144",
+      "name": "Bolstered",
+      "rarity": "silver"
+    },
+    "2148": {
+      "id": "2148",
+      "name": "Double Strike",
+      "rarity": "silver"
+    },
+    "3036": {
+      "id": "3036",
+      "name": "Double Time",
+      "rarity": "gold"
+    },
+    "7004": {
+      "id": "7004",
+      "name": "Drink Up",
+      "rarity": "silver"
+    },
+    "1414": {
+      "id": "1414",
+      "name": "Droppybara",
+      "rarity": "prismatic"
+    },
+    "394": {
+      "id": "394",
+      "name": "Dust To Diamonds",
+      "rarity": "silver"
+    },
+    "1331": {
+      "id": "1331",
+      "name": "Empyrean Promise",
+      "rarity": "prismatic"
+    },
+    "3163": {
+      "id": "3163",
+      "name": "Enchanting Butterflies",
+      "rarity": "gold"
+    },
+    "2091": {
+      "id": "2091",
+      "name": "Endless Decimation",
+      "rarity": "gold"
+    },
+    "2082": {
+      "id": "2082",
+      "name": "Our Healing",
+      "rarity": "gold"
+    },
+    "1333": {
+      "id": "1333",
+      "name": "Escape Plan",
+      "rarity": "silver"
+    },
+    "1344": {
+      "id": "1344",
+      "name": "Final Form",
+      "rarity": "prismatic"
+    },
+    "2032": {
+      "id": "2032",
+      "name": "Shark Bait",
+      "rarity": "gold"
+    },
+    "1348": {
+      "id": "1348",
+      "name": "Flash 2",
+      "rarity": "silver"
+    },
+    "3085": {
+      "id": "3085",
+      "name": "Flow of Spirit",
+      "rarity": "silver"
+    },
+    "2127": {
+      "id": "2127",
+      "name": "Forged By The Master",
+      "rarity": "silver"
+    },
+    "3121": {
+      "id": "3121",
+      "name": "Fruitify",
+      "rarity": "silver"
+    },
+    "7010": {
+      "id": "7010",
+      "name": "Time Warp: Heartsteel",
+      "rarity": "gold"
+    },
+    "1321": {
+      "id": "1321",
+      "name": "Gash",
+      "rarity": "prismatic"
+    },
+    "3004": {
+      "id": "3004",
+      "name": "Get Jinxed",
+      "rarity": "gold"
+    },
+    "3063": {
+      "id": "3063",
+      "name": "Gift of the Drowned",
+      "rarity": "silver"
+    },
+    "1325": {
+      "id": "1325",
+      "name": "Glass Cannon",
+      "rarity": "prismatic"
+    },
+    "1392": {
+      "id": "1392",
+      "name": "Holy Snowball",
+      "rarity": "prismatic"
+    },
+    "1335": {
+      "id": "1335",
+      "name": "Goldrend",
+      "rarity": "prismatic"
+    },
+    "397": {
+      "id": "397",
+      "name": "Got That Dog In Em",
+      "rarity": "prismatic"
+    },
+    "1406": {
+      "id": "1406",
+      "name": "Grandma's Chili Oil",
+      "rarity": "gold"
+    },
+    "3149": {
+      "id": "3149",
+      "name": "Group Hug",
+      "rarity": "prismatic"
+    },
+    "1401": {
+      "id": "1401",
+      "name": "Growth Spurt",
+      "rarity": "gold"
+    },
+    "3172": {
+      "id": "3172",
+      "name": "THRASH",
+      "rarity": "gold"
+    },
+    "3176": {
+      "id": "3176",
+      "name": "   ",
+      "rarity": "gold"
+    },
+    "3170": {
+      "id": "3170",
+      "name": "HEAVY",
+      "rarity": "gold"
+    },
+    "3173": {
+      "id": "3173",
+      "name": "DOOM",
+      "rarity": "gold"
+    },
+    "3171": {
+      "id": "3171",
+      "name": "POWER",
+      "rarity": "gold"
+    },
+    "1389": {
+      "id": "1389",
+      "name": "Hand of Baron",
+      "rarity": "prismatic"
+    },
+    "3052": {
+      "id": "3052",
+      "name": "Hands off the Talent",
+      "rarity": "silver"
+    },
+    "7005": {
+      "id": "7005",
+      "name": "Haste Makes Waste",
+      "rarity": "prismatic"
+    },
+    "1341": {
+      "id": "1341",
+      "name": "Hat on a Hat",
+      "rarity": "silver"
+    },
+    "3132": {
+      "id": "3132",
+      "name": "Heavy Is The Crown",
+      "rarity": "gold"
+    },
+    "7012": {
+      "id": "7012",
+      "name": "The Hex Core",
+      "rarity": "prismatic"
+    },
+    "1416": {
+      "id": "1416",
+      "name": "Hextech Soul",
+      "rarity": "silver"
+    },
+    "1388": {
+      "id": "1388",
+      "name": "Infinite Recursion",
+      "rarity": "prismatic"
+    },
+    "2125": {
+      "id": "2125",
+      "name": "It's Go Time",
+      "rarity": "silver"
+    },
+    "3123": {
+      "id": "3123",
+      "name": "Jeweled Bracelet",
+      "rarity": "gold"
+    },
+    "2126": {
+      "id": "2126",
+      "name": "Reload",
+      "rarity": "gold"
+    },
+    "2026": {
+      "id": "2026",
+      "name": "Kill Secured",
+      "rarity": "silver"
+    },
+    "1337": {
+      "id": "1337",
+      "name": "King Me",
+      "rarity": "prismatic"
+    },
+    "1339": {
+      "id": "1339",
+      "name": "Laser Heal",
+      "rarity": "prismatic"
+    },
+    "3094": {
+      "id": "3094",
+      "name": "Lich Brain",
+      "rarity": "silver"
+    },
+    "2096": {
+      "id": "2096",
+      "name": "Lil' Extra Help",
+      "rarity": "gold"
+    },
+    "3134": {
+      "id": "3134",
+      "name": "Lonely Warrior",
+      "rarity": "silver"
+    },
+    "380": {
+      "id": "380",
+      "name": "Mercy",
+      "rarity": "gold"
+    },
+    "2133": {
+      "id": "2133",
+      "name": "Mercy's Strike",
+      "rarity": "gold"
+    },
+    "1314": {
+      "id": "1314",
+      "name": "Mighty Shield",
+      "rarity": "silver"
+    },
+    "2072": {
+      "id": "2072",
+      "name": "Spell Split",
+      "rarity": "prismatic"
+    },
+    "3053": {
+      "id": "3053",
+      "name": "Mosh Monster",
+      "rarity": "prismatic"
+    },
+    "2043": {
+      "id": "2043",
+      "name": "Nature is Healing",
+      "rarity": "gold"
+    },
+    "1326": {
+      "id": "1326",
+      "name": "Nightstalking",
+      "rarity": "gold"
+    },
+    "3059": {
+      "id": "3059",
+      "name": "No Mana, No Problem",
+      "rarity": "silver"
+    },
+    "1332": {
+      "id": "1332",
+      "name": "Ominous Pact",
+      "rarity": "prismatic"
+    },
+    "2119": {
+      "id": "2119",
+      "name": "Overextender",
+      "rarity": "gold"
+    },
+    "2135": {
+      "id": "2135",
+      "name": "Pin Cushion",
+      "rarity": "prismatic"
+    },
+    "2123": {
+      "id": "2123",
+      "name": "Overloaded",
+      "rarity": "prismatic"
+    },
+    "2137": {
+      "id": "2137",
+      "name": "Pat On The Back",
+      "rarity": "gold"
+    },
+    "2139": {
+      "id": "2139",
+      "name": "Porcupine",
+      "rarity": "gold"
+    },
+    "1358": {
+      "id": "1358",
+      "name": "Pinball",
+      "rarity": "gold"
+    },
+    "1347": {
+      "id": "1347",
+      "name": "Poltergeist",
+      "rarity": "silver"
+    },
+    "2046": {
+      "id": "2046",
+      "name": "Poro Stampede",
+      "rarity": "prismatic"
+    },
+    "2102": {
+      "id": "2102",
+      "name": "Pressure Cooker",
+      "rarity": "gold"
+    },
+    "1421": {
+      "id": "1421",
+      "name": "Prom Queen",
+      "rarity": "prismatic"
+    },
+    "1343": {
+      "id": "1343",
+      "name": "Sneakerhead",
+      "rarity": "prismatic"
+    },
+    "2141": {
+      "id": "2141",
+      "name": "Ultra Hydra",
+      "rarity": "prismatic"
+    },
+    "393": {
+      "id": "393",
+      "name": "Icathia's Fall",
+      "rarity": "prismatic"
+    },
+    "391": {
+      "id": "391",
+      "name": "Rags to Riches",
+      "rarity": "silver"
+    },
+    "1330": {
+      "id": "1330",
+      "name": "ReEnergize",
+      "rarity": "silver"
+    },
+    "3075": {
+      "id": "3075",
+      "name": "Recoil",
+      "rarity": "gold"
+    },
+    "1391": {
+      "id": "1391",
+      "name": "Red Envelopes",
+      "rarity": "gold"
+    },
+    "374": {
+      "id": "374",
+      "name": "Rice and Chicken",
+      "rarity": "gold"
+    },
+    "375": {
+      "id": "375",
+      "name": "Rice and Fish",
+      "rarity": "gold"
+    },
+    "376": {
+      "id": "376",
+      "name": "Rice and Pork",
+      "rarity": "gold"
+    },
+    "3039": {
+      "id": "3039",
+      "name": "Salvation",
+      "rarity": "gold"
+    },
+    "3129": {
+      "id": "3129",
+      "name": "Sap Magic",
+      "rarity": "gold"
+    },
+    "381": {
+      "id": "381",
+      "name": "Scavenger",
+      "rarity": "gold"
+    },
+    "2034": {
+      "id": "2034",
+      "name": "Shark Tempest",
+      "rarity": "gold"
+    },
+    "1373": {
+      "id": "1373",
+      "name": "Shrink Engine",
+      "rarity": "gold"
+    },
+    "2118": {
+      "id": "2118",
+      "name": "Ult Bot",
+      "rarity": "prismatic"
+    },
+    "2109": {
+      "id": "2109",
+      "name": "Snap Back",
+      "rarity": "gold"
+    },
+    "1342": {
+      "id": "1342",
+      "name": "Snowball Roulette",
+      "rarity": "gold"
+    },
+    "1334": {
+      "id": "1334",
+      "name": "Snowball Upgrade",
+      "rarity": "gold"
+    },
+    "2080": {
+      "id": "2080",
+      "name": "Snowblast",
+      "rarity": "gold"
+    },
+    "1420": {
+      "id": "1420",
+      "name": "Sonata",
+      "rarity": "gold"
+    },
+    "1375": {
+      "id": "1375",
+      "name": "Soul Eater",
+      "rarity": "gold"
+    },
+    "3025": {
+      "id": "3025",
+      "name": "Sound Barrier",
+      "rarity": "silver"
+    },
+    "2116": {
+      "id": "2116",
+      "name": "Pursuit of Power",
+      "rarity": "gold"
+    },
+    "2054": {
+      "id": "2054",
+      "name": "Tripleshot",
+      "rarity": "prismatic"
+    },
+    "384": {
+      "id": "384",
+      "name": "Spellcraft",
+      "rarity": "prismatic"
+    },
+    "7013": {
+      "id": "7013",
+      "name": "Spirit of the Jungle Main",
+      "rarity": "gold"
+    },
+    "2115": {
+      "id": "2115",
+      "name": "Squishy Slappy Grab",
+      "rarity": "prismatic"
+    },
+    "7006": {
+      "id": "7006",
+      "name": "Stabby Stabby",
+      "rarity": "silver"
+    },
+    "3131": {
+      "id": "3131",
+      "name": "Still Here",
+      "rarity": "gold"
+    },
+    "7015": {
+      "id": "7015",
+      "name": "Summoner's Safari",
+      "rarity": "silver"
+    },
+    "2108": {
+      "id": "2108",
+      "name": "Support Main",
+      "rarity": "silver"
+    },
+    "2134": {
+      "id": "2134",
+      "name": "Surge Field",
+      "rarity": "prismatic"
+    },
+    "1315": {
+      "id": "1315",
+      "name": "Swift and Safe",
+      "rarity": "silver"
+    },
+    "3116": {
+      "id": "3116",
+      "name": "Take'em Down Down Down",
+      "rarity": "gold"
+    },
+    "2129": {
+      "id": "2129",
+      "name": "Terrain'd",
+      "rarity": "gold"
+    },
+    "3078": {
+      "id": "3078",
+      "name": "The Boom and the Bass",
+      "rarity": "gold"
+    },
+    "3016": {
+      "id": "3016",
+      "name": "Third Times the Harm",
+      "rarity": "prismatic"
+    },
+    "3058": {
+      "id": "3058",
+      "name": "Tickle Monster",
+      "rarity": "gold"
+    },
+    "2076": {
+      "id": "2076",
+      "name": "Stay Resolute",
+      "rarity": "silver"
+    },
+    "3079": {
+      "id": "3079",
+      "name": "Totentanz",
+      "rarity": "prismatic"
+    },
+    "1400": {
+      "id": "1400",
+      "name": "Final City Transit",
+      "rarity": "gold"
+    },
+    "378": {
+      "id": "378",
+      "name": "Transmute: Silver",
+      "rarity": "prismatic"
+    },
+    "389": {
+      "id": "389",
+      "name": "Trash To Treasure",
+      "rarity": "silver"
+    },
+    "7011": {
+      "id": "7011",
+      "name": "True Eternity",
+      "rarity": "prismatic"
+    },
+    "2136": {
+      "id": "2136",
+      "name": "Trusty Weapon",
+      "rarity": "silver"
+    },
+    "1415": {
+      "id": "1415",
+      "name": "Twin Fire",
+      "rarity": "silver"
+    },
+    "1349": {
+      "id": "1349",
+      "name": "Ultimate Awakening",
+      "rarity": "prismatic"
+    },
+    "3055": {
+      "id": "3055",
+      "name": "Ultimate Recursion",
+      "rarity": "silver"
+    },
+    "390": {
+      "id": "390",
+      "name": "Unstable Transmutation",
+      "rarity": "gold"
+    },
+    "2157": {
+      "id": "2157",
+      "name": "Upgrade Death's Dance",
+      "rarity": "silver"
+    },
+    "7007": {
+      "id": "7007",
+      "name": "Upgrade: Deathfire Grasp",
+      "rarity": "gold"
+    },
+    "7009": {
+      "id": "7009",
+      "name": "Upgrade: Innervating Locket",
+      "rarity": "gold"
+    },
+    "1340": {
+      "id": "1340",
+      "name": "Upgrade Mikael's Blessing",
+      "rarity": "prismatic"
+    },
+    "2140": {
+      "id": "2140",
+      "name": "Upgrade Ravenous Hydra",
+      "rarity": "gold"
+    },
+    "3150": {
+      "id": "3150",
+      "name": "Upgrade Stormsurge",
+      "rarity": "gold"
+    },
+    "2143": {
+      "id": "2143",
+      "name": "Upgrade Sundered Sky",
+      "rarity": "gold"
+    },
+    "1379": {
+      "id": "1379",
+      "name": "Upgrade Sword of Blossoming Dawn",
+      "rarity": "prismatic"
+    },
+    "1411": {
+      "id": "1411",
+      "name": "Upgrade Thornmail",
+      "rarity": "silver"
+    },
+    "7001": {
+      "id": "7001",
+      "name": "Upgrade: Zz'Rot Portal",
+      "rarity": "silver"
+    },
+    "1346": {
+      "id": "1346",
+      "name": "Vampirism",
+      "rarity": "gold"
+    },
+    "1034": {
+      "id": "1034",
+      "name": "Veil of Warding",
+      "rarity": "silver"
+    },
+    "2097": {
+      "id": "2097",
+      "name": "Void Dash",
+      "rarity": "gold"
+    },
+    "2138": {
+      "id": "2138",
+      "name": "Adaptive Ward",
+      "rarity": "silver"
+    },
+    "2132": {
+      "id": "2132",
+      "name": "Warlock Juicebox",
+      "rarity": "gold"
+    },
+    "3081": {
+      "id": "3081",
+      "name": "Weapon of Destiny",
+      "rarity": "gold"
+    },
+    "379": {
+      "id": "379",
+      "name": "Wild Fire",
+      "rarity": "prismatic"
+    },
+    "1316": {
+      "id": "1316",
+      "name": "Wind Beneath Blade",
+      "rarity": "silver"
+    },
+    "1386": {
+      "id": "1386",
+      "name": "Spin Me Right Round",
+      "rarity": "silver"
+    },
+    "205": {
+      "id": "205",
+      "name": "ADAPt",
+      "rarity": "silver"
+    },
+    "1": {
+      "id": "1",
+      "name": "Accelerating Sorcery",
+      "rarity": "prismatic"
+    },
+    "336": {
+      "id": "336",
+      "name": "Aim for the Head",
+      "rarity": "gold"
+    },
+    "141": {
+      "id": "141",
+      "name": "All For You",
+      "rarity": "gold"
+    },
+    "309": {
+      "id": "309",
+      "name": "And My Axe!",
+      "rarity": "gold"
+    },
+    "2": {
+      "id": "2",
+      "name": "Apex Inventor",
+      "rarity": "gold"
+    },
+    "404": {
+      "id": "404",
+      "name": "404 Augment Not Found",
+      "rarity": "silver"
+    },
+    "405": {
+      "id": "405",
+      "name": "Augment 405",
+      "rarity": "prismatic"
+    },
+    "322": {
+      "id": "322",
+      "name": "Augmented Power",
+      "rarity": "silver"
+    },
+    "4": {
+      "id": "4",
+      "name": "Back To Basics",
+      "rarity": "prismatic"
+    },
+    "5": {
+      "id": "5",
+      "name": "Banner of Command",
+      "rarity": "gold"
+    },
+    "180": {
+      "id": "180",
+      "name": "Big Brain",
+      "rarity": "gold"
+    },
+    "6": {
+      "id": "6",
+      "name": "Blade Waltz",
+      "rarity": "prismatic"
+    },
+    "200": {
+      "id": "200",
+      "name": "Blood Brother",
+      "rarity": "gold"
+    },
+    "332": {
+      "id": "332",
+      "name": "Blood Mage",
+      "rarity": "prismatic"
+    },
+    "7": {
+      "id": "7",
+      "name": "Blunt Force",
+      "rarity": "silver"
+    },
+    "321": {
+      "id": "321",
+      "name": "Bodyguard",
+      "rarity": "gold"
+    },
+    "324": {
+      "id": "324",
+      "name": "Bravest of the Brave",
+      "rarity": "silver"
+    },
+    "103": {
+      "id": "103",
+      "name": "Bread And Butter",
+      "rarity": "gold"
+    },
+    "151": {
+      "id": "151",
+      "name": "Bread And Cheese",
+      "rarity": "gold"
+    },
+    "150": {
+      "id": "150",
+      "name": "Bread And Jam",
+      "rarity": "gold"
+    },
+    "346": {
+      "id": "346",
+      "name": "Bread Sandwich",
+      "rarity": "prismatic"
+    },
+    "8": {
+      "id": "8",
+      "name": "Buckle Up",
+      "rarity": "silver"
+    },
+    "9": {
+      "id": "9",
+      "name": "Buff Buddies",
+      "rarity": "silver"
+    },
+    "230": {
+      "id": "230",
+      "name": "Bullet Heaven",
+      "rarity": "prismatic"
+    },
+    "320": {
+      "id": "320",
+      "name": "Calculated Risk",
+      "rarity": "silver"
+    },
+    "10": {
+      "id": "10",
+      "name": "Cannon Fodder",
+      "rarity": "silver"
+    },
+    "11": {
+      "id": "11",
+      "name": "Can't Touch This",
+      "rarity": "prismatic"
+    },
+    "12": {
+      "id": "12",
+      "name": "Castle",
+      "rarity": "silver"
+    },
+    "13": {
+      "id": "13",
+      "name": "Celestial Body",
+      "rarity": "gold"
+    },
+    "193": {
+      "id": "193",
+      "name": "Center of the Universe",
+      "rarity": "prismatic"
+    },
+    "323": {
+      "id": "323",
+      "name": "Cerberus",
+      "rarity": "prismatic"
+    },
+    "166": {
+      "id": "166",
+      "name": "Chain Lightning",
+      "rarity": "prismatic"
+    },
+    "14": {
+      "id": "14",
+      "name": "Chauffeur",
+      "rarity": "prismatic"
+    },
+    "15": {
+      "id": "15",
+      "name": "Circle of Death",
+      "rarity": "prismatic"
+    },
+    "110": {
+      "id": "110",
+      "name": "Clothesline",
+      "rarity": "silver"
+    },
+    "310": {
+      "id": "310",
+      "name": "Clown College",
+      "rarity": "prismatic"
+    },
+    "16": {
+      "id": "16",
+      "name": "Combo Master",
+      "rarity": "gold"
+    },
+    "17": {
+      "id": "17",
+      "name": "Contract Killer",
+      "rarity": "silver"
+    },
+    "18": {
+      "id": "18",
+      "name": "Courage of the Colossus",
+      "rarity": "prismatic"
+    },
+    "341": {
+      "id": "341",
+      "name": "Gain an Augment slot",
+      "rarity": "eventchoice"
+    },
+    "340": {
+      "id": "340",
+      "name": "Gain a Prismatic Stat Anvil",
+      "rarity": "eventchoice"
+    },
+    "342": {
+      "id": "342",
+      "name": "Level Augments",
+      "rarity": "eventchoice"
+    },
+    "118": {
+      "id": "118",
+      "name": "Critical Healing",
+      "rarity": "gold"
+    },
+    "215": {
+      "id": "215",
+      "name": "Dark Blessing",
+      "rarity": "gold"
+    },
+    "19": {
+      "id": "19",
+      "name": "Dashing",
+      "rarity": "prismatic"
+    },
+    "20": {
+      "id": "20",
+      "name": "Dawnbringer's Resolve",
+      "rarity": "gold"
+    },
+    "217": {
+      "id": "217",
+      "name": "Deathtouch",
+      "rarity": "gold"
+    },
+    "21": {
+      "id": "21",
+      "name": "Defensive Maneuvers",
+      "rarity": "gold"
+    },
+    "22": {
+      "id": "22",
+      "name": "Deft",
+      "rarity": "silver"
+    },
+    "171": {
+      "id": "171",
+      "name": "Dematerialize",
+      "rarity": "silver"
+    },
+    "23": {
+      "id": "23",
+      "name": "Demon's Dance",
+      "rarity": "gold"
+    },
+    "218": {
+      "id": "218",
+      "name": "Desecrator",
+      "rarity": "silver"
+    },
+    "330": {
+      "id": "330",
+      "name": "Despoil",
+      "rarity": "silver"
+    },
+    "24": {
+      "id": "24",
+      "name": "Die Another Day",
+      "rarity": "gold"
+    },
+    "25": {
+      "id": "25",
+      "name": "Dive Bomber",
+      "rarity": "silver"
+    },
+    "301": {
+      "id": "301",
+      "name": "Divine Intervention",
+      "rarity": "gold"
+    },
+    "26": {
+      "id": "26",
+      "name": "Don't Blink",
+      "rarity": "silver"
+    },
+    "102": {
+      "id": "102",
+      "name": "Don't Chase",
+      "rarity": "silver"
+    },
+    "219": {
+      "id": "219",
+      "name": "Doomsayer",
+      "rarity": "prismatic"
+    },
+    "134": {
+      "id": "134",
+      "name": "Draw Your Sword",
+      "rarity": "prismatic"
+    },
+    "216": {
+      "id": "216",
+      "name": "Dreadbringer",
+      "rarity": "prismatic"
+    },
+    "225": {
+      "id": "225",
+      "name": "Dual Wield",
+      "rarity": "prismatic"
+    },
+    "27": {
+      "id": "27",
+      "name": "Earthwake",
+      "rarity": "prismatic"
+    },
+    "344": {
+      "id": "344",
+      "name": "Energetic",
+      "rarity": "silver"
+    },
+    "315": {
+      "id": "315",
+      "name": "Energetic Caster",
+      "rarity": "gold"
+    },
+    "28": {
+      "id": "28",
+      "name": "Erosion",
+      "rarity": "silver"
+    },
+    "328": {
+      "id": "328",
+      "name": "Infernal Chains",
+      "rarity": "prismatic"
+    },
+    "29": {
+      "id": "29",
+      "name": "Ethereal Weapon",
+      "rarity": "gold"
+    },
+    "30": {
+      "id": "30",
+      "name": "Eureka",
+      "rarity": "prismatic"
+    },
+    "31": {
+      "id": "31",
+      "name": "Evocation",
+      "rarity": "silver"
+    },
+    "32": {
+      "id": "32",
+      "name": "Executioner",
+      "rarity": "silver"
+    },
+    "33": {
+      "id": "33",
+      "name": "Extendo-Arm",
+      "rarity": "gold"
+    },
+    "34": {
+      "id": "34",
+      "name": "Fallen Aegis",
+      "rarity": "silver"
+    },
+    "220": {
+      "id": "220",
+      "name": "Fan the Hammer",
+      "rarity": "prismatic"
+    },
+    "35": {
+      "id": "35",
+      "name": "Feel the Burn",
+      "rarity": "prismatic"
+    },
+    "194": {
+      "id": "194",
+      "name": "Fey Magic",
+      "rarity": "prismatic"
+    },
+    "229": {
+      "id": "229",
+      "name": "Fire Sale",
+      "rarity": "silver"
+    },
+    "36": {
+      "id": "36",
+      "name": "Firebrand",
+      "rarity": "gold"
+    },
+    "308": {
+      "id": "308",
+      "name": "Firefox",
+      "rarity": "silver"
+    },
+    "37": {
+      "id": "37",
+      "name": "First-Aid Kit",
+      "rarity": "silver"
+    },
+    "187": {
+      "id": "187",
+      "name": "Flashbang",
+      "rarity": "silver"
+    },
+    "116": {
+      "id": "116",
+      "name": "Flashy",
+      "rarity": "gold"
+    },
+    "38": {
+      "id": "38",
+      "name": "From Beginning to End",
+      "rarity": "gold"
+    },
+    "39": {
+      "id": "39",
+      "name": "Frost Wraith",
+      "rarity": "silver"
+    },
+    "40": {
+      "id": "40",
+      "name": "Frozen Foundations",
+      "rarity": "silver"
+    },
+    "222": {
+      "id": "222",
+      "name": "Fruits of Your Labor",
+      "rarity": "silver"
+    },
+    "213": {
+      "id": "213",
+      "name": "Fully Automated",
+      "rarity": "silver"
+    },
+    "355": {
+      "id": "355",
+      "name": "Gain Stat Anvil",
+      "rarity": "eventchoice"
+    },
+    "234": {
+      "id": "234",
+      "name": "Gamba Anvil",
+      "rarity": "prismatic"
+    },
+    "195": {
+      "id": "195",
+      "name": "Giant Slayer",
+      "rarity": "prismatic"
+    },
+    "366": {
+      "id": "366",
+      "name": "Abstain From Power",
+      "rarity": "eventchoice"
+    },
+    "367": {
+      "id": "367",
+      "name": "Abstain From Risk",
+      "rarity": "eventchoice"
+    },
+    "365": {
+      "id": "365",
+      "name": "Abstain From Wealth",
+      "rarity": "eventchoice"
+    },
+    "348": {
+      "id": "348",
+      "name": "Bloodrazor",
+      "rarity": "eventchoice"
+    },
+    "347": {
+      "id": "347",
+      "name": "Chemtech Putrifier",
+      "rarity": "eventchoice"
+    },
+    "372": {
+      "id": "372",
+      "name": "Compulsion For Power",
+      "rarity": "eventchoice"
+    },
+    "373": {
+      "id": "373",
+      "name": "Compulsion For Risk",
+      "rarity": "eventchoice"
+    },
+    "371": {
+      "id": "371",
+      "name": "Compulsion For Wealth",
+      "rarity": "eventchoice"
+    },
+    "369": {
+      "id": "369",
+      "name": "Craving For Power",
+      "rarity": "eventchoice"
+    },
+    "370": {
+      "id": "370",
+      "name": "Craving For Risk",
+      "rarity": "eventchoice"
+    },
+    "368": {
+      "id": "368",
+      "name": "Craving For Wealth",
+      "rarity": "eventchoice"
+    },
+    "349": {
+      "id": "349",
+      "name": "Dematerializer",
+      "rarity": "eventchoice"
+    },
+    "350": {
+      "id": "350",
+      "name": "Enchanted Flask",
+      "rarity": "eventchoice"
+    },
+    "351": {
+      "id": "351",
+      "name": "Frozen Mallet",
+      "rarity": "eventchoice"
+    },
+    "359": {
+      "id": "359",
+      "name": "Lamb's Respite",
+      "rarity": "eventchoice"
+    },
+    "354": {
+      "id": "354",
+      "name": "Remnant of the Watchers",
+      "rarity": "eventchoice"
+    },
+    "303": {
+      "id": "303",
+      "name": "Sacrifice: For Gold",
+      "rarity": "gold"
+    },
+    "304": {
+      "id": "304",
+      "name": "Sacrifice: For Prismatic",
+      "rarity": "prismatic"
+    },
+    "302": {
+      "id": "302",
+      "name": "Sacrifice: For Silver",
+      "rarity": "silver"
+    },
+    "392": {
+      "id": "392",
+      "name": "Swindler's Orb",
+      "rarity": "eventchoice"
+    },
+    "361": {
+      "id": "361",
+      "name": "Ally Demon",
+      "rarity": "eventchoice"
+    },
+    "362": {
+      "id": "362",
+      "name": "Ally Hunter",
+      "rarity": "eventchoice"
+    },
+    "358": {
+      "id": "358",
+      "name": "Wolf's Frenzy",
+      "rarity": "eventchoice"
+    },
+    "41": {
+      "id": "41",
+      "name": "Goliath",
+      "rarity": "prismatic"
+    },
+    "138": {
+      "id": "138",
+      "name": "Goredrink",
+      "rarity": "silver"
+    },
+    "316": {
+      "id": "316",
+      "name": "Grievous Venom",
+      "rarity": "silver"
+    },
+    "42": {
+      "id": "42",
+      "name": "Guilty Pleasure",
+      "rarity": "silver"
+    },
+    "334": {
+      "id": "334",
+      "name": "Hallucinate",
+      "rarity": "prismatic"
+    },
+    "241": {
+      "id": "241",
+      "name": "Hat Trick",
+      "rarity": "gold"
+    },
+    "181": {
+      "id": "181",
+      "name": "Heavy Hitter",
+      "rarity": "silver"
+    },
+    "338": {
+      "id": "338",
+      "name": "Hive Mind",
+      "rarity": "prismatic"
+    },
+    "207": {
+      "id": "207",
+      "name": "Hold Very Still",
+      "rarity": "silver"
+    },
+    "198": {
+      "id": "198",
+      "name": "Holy Fire",
+      "rarity": "gold"
+    },
+    "105": {
+      "id": "105",
+      "name": "Homeguard",
+      "rarity": "silver"
+    },
+    "357": {
+      "id": "357",
+      "name": "Hybrid",
+      "rarity": "gold"
+    },
+    "44": {
+      "id": "44",
+      "name": "Ice Cold",
+      "rarity": "silver"
+    },
+    "149": {
+      "id": "149",
+      "name": "Impassable",
+      "rarity": "gold"
+    },
+    "45": {
+      "id": "45",
+      "name": "Infernal Conduit",
+      "rarity": "prismatic"
+    },
+    "46": {
+      "id": "46",
+      "name": "Infernal Soul",
+      "rarity": "silver"
+    },
+    "47": {
+      "id": "47",
+      "name": "It's Critical",
+      "rarity": "gold"
+    },
+    "211": {
+      "id": "211",
+      "name": "It's Killing Time",
+      "rarity": "gold"
+    },
+    "48": {
+      "id": "48",
+      "name": "Jeweled Gauntlet",
+      "rarity": "prismatic"
+    },
+    "49": {
+      "id": "49",
+      "name": "Juice Box",
+      "rarity": "silver"
+    },
+    "242": {
+      "id": "242",
+      "name": "Juice Press",
+      "rarity": "silver"
+    },
+    "50": {
+      "id": "50",
+      "name": "Keystone Conjurer",
+      "rarity": "gold"
+    },
+    "174": {
+      "id": "174",
+      "name": "Laser Eyes",
+      "rarity": "prismatic"
+    },
+    "305": {
+      "id": "305",
+      "name": "Leg Day",
+      "rarity": "silver"
+    },
+    "231": {
+      "id": "231",
+      "name": "Light Warden",
+      "rarity": "gold"
+    },
+    "51": {
+      "id": "51",
+      "name": "Light 'em Up!",
+      "rarity": "silver"
+    },
+    "52": {
+      "id": "52",
+      "name": "Lightning Strikes",
+      "rarity": "gold"
+    },
+    "53": {
+      "id": "53",
+      "name": "Mad Scientist",
+      "rarity": "prismatic"
+    },
+    "133": {
+      "id": "133",
+      "name": "Magic Missile",
+      "rarity": "gold"
+    },
+    "345": {
+      "id": "345",
+      "name": "Magical Girl",
+      "rarity": "prismatic"
+    },
+    "129": {
+      "id": "129",
+      "name": "Marksmage",
+      "rarity": "gold"
+    },
+    "54": {
+      "id": "54",
+      "name": "Master of Duality",
+      "rarity": "prismatic"
+    },
+    "55": {
+      "id": "55",
+      "name": "Midnight Express",
+      "rarity": "silver"
+    },
+    "56": {
+      "id": "56",
+      "name": "Mind to Matter",
+      "rarity": "silver"
+    },
+    "104": {
+      "id": "104",
+      "name": "Minionmancer",
+      "rarity": "gold"
+    },
+    "172": {
+      "id": "172",
+      "name": "Mirror Image",
+      "rarity": "silver"
+    },
+    "57": {
+      "id": "57",
+      "name": "Mountain Soul",
+      "rarity": "silver"
+    },
+    "331": {
+      "id": "331",
+      "name": "Multitool",
+      "rarity": "gold"
+    },
+    "58": {
+      "id": "58",
+      "name": "Mystic Punch",
+      "rarity": "prismatic"
+    },
+    "59": {
+      "id": "59",
+      "name": "Mythical",
+      "rarity": "gold"
+    },
+    "329": {
+      "id": "329",
+      "name": "Necromancer",
+      "rarity": "prismatic"
+    },
+    "177": {
+      "id": "177",
+      "name": "Nesting Doll",
+      "rarity": "prismatic"
+    },
+    "43": {
+      "id": "43",
+      "name": "Now You See Me",
+      "rarity": "silver"
+    },
+    "3": {
+      "id": "3",
+      "name": "Null Augment",
+      "rarity": "silver"
+    },
+    "251": {
+      "id": "251",
+      "name": "Numb to Pain",
+      "rarity": "silver"
+    },
+    "109": {
+      "id": "109",
+      "name": "Oathsworn",
+      "rarity": "gold"
+    },
+    "60": {
+      "id": "60",
+      "name": "Ocean Soul",
+      "rarity": "silver"
+    },
+    "61": {
+      "id": "61",
+      "name": "OK Boomerang",
+      "rarity": "gold"
+    },
+    "62": {
+      "id": "62",
+      "name": "Omni Soul",
+      "rarity": "prismatic"
+    },
+    "208": {
+      "id": "208",
+      "name": "Orbital Laser",
+      "rarity": "prismatic"
+    },
+    "63": {
+      "id": "63",
+      "name": "Outlaw's Grit",
+      "rarity": "gold"
+    },
+    "311": {
+      "id": "311",
+      "name": "Overflow",
+      "rarity": "gold"
+    },
+    "317": {
+      "id": "317",
+      "name": "Pandora's Box",
+      "rarity": "prismatic"
+    },
+    "335": {
+      "id": "335",
+      "name": "Panic Room",
+      "rarity": "silver"
+    },
+    "240": {
+      "id": "240",
+      "name": "Parasitic Mutation",
+      "rarity": "silver"
+    },
+    "175": {
+      "id": "175",
+      "name": "Parasitic Relationship",
+      "rarity": "gold"
+    },
+    "306": {
+      "id": "306",
+      "name": "Parry",
+      "rarity": "silver"
+    },
+    "64": {
+      "id": "64",
+      "name": "Perseverance",
+      "rarity": "gold"
+    },
+    "65": {
+      "id": "65",
+      "name": "Phenomenal Evil",
+      "rarity": "gold"
+    },
+    "224": {
+      "id": "224",
+      "name": "Prismatic Egg",
+      "rarity": "prismatic"
+    },
+    "66": {
+      "id": "66",
+      "name": "Quantum Computing",
+      "rarity": "prismatic"
+    },
+    "192": {
+      "id": "192",
+      "name": "Quest: Angel of Retribution",
+      "rarity": "gold"
+    },
+    "318": {
+      "id": "318",
+      "name": "Quest: Mad Hatter",
+      "rarity": "gold"
+    },
+    "333": {
+      "id": "333",
+      "name": "Quest: Rite Of The Forge God",
+      "rarity": "prismatic"
+    },
+    "152": {
+      "id": "152",
+      "name": "Quest: Steel Your Heart",
+      "rarity": "gold"
+    },
+    "319": {
+      "id": "319",
+      "name": "Quest: Three Sacred Treasures",
+      "rarity": "gold"
+    },
+    "154": {
+      "id": "154",
+      "name": "Quest: Urf's Champion",
+      "rarity": "gold"
+    },
+    "156": {
+      "id": "156",
+      "name": "Quest: Wooglet's Witchcap",
+      "rarity": "prismatic"
+    },
+    "67": {
+      "id": "67",
+      "name": "Rabble Rousing",
+      "rarity": "gold"
+    },
+    "125": {
+      "id": "125",
+      "name": "Raid Boss",
+      "rarity": "prismatic"
+    },
+    "68": {
+      "id": "68",
+      "name": "Recursion",
+      "rarity": "gold"
+    },
+    "364": {
+      "id": "364",
+      "name": "Replace Augment",
+      "rarity": "eventchoice"
+    },
+    "69": {
+      "id": "69",
+      "name": "Repulsor",
+      "rarity": "silver"
+    },
+    "165": {
+      "id": "165",
+      "name": "Restart",
+      "rarity": "gold"
+    },
+    "70": {
+      "id": "70",
+      "name": "Restless Restoration",
+      "rarity": "gold"
+    },
+    "343": {
+      "id": "343",
+      "name": "Righteous Fury",
+      "rarity": "prismatic"
+    },
+    "170": {
+      "id": "170",
+      "name": "Scoped Weapons",
+      "rarity": "silver"
+    },
+    "71": {
+      "id": "71",
+      "name": "Scopier Weapons",
+      "rarity": "gold"
+    },
+    "115": {
+      "id": "115",
+      "name": "Scopiest Weapons",
+      "rarity": "prismatic"
+    },
+    "72": {
+      "id": "72",
+      "name": "Searing Dawn",
+      "rarity": "gold"
+    },
+    "108": {
+      "id": "108",
+      "name": "Self Destruct",
+      "rarity": "silver"
+    },
+    "120": {
+      "id": "120",
+      "name": "Serve Beyond Death",
+      "rarity": "silver"
+    },
+    "73": {
+      "id": "73",
+      "name": "Shadow Runner",
+      "rarity": "silver"
+    },
+    "74": {
+      "id": "74",
+      "name": "Shrink Ray",
+      "rarity": "gold"
+    },
+    "356": {
+      "id": "356",
+      "name": "Silver Spoon",
+      "rarity": "silver"
+    },
+    "113": {
+      "id": "113",
+      "name": "Skilled Sniper",
+      "rarity": "gold"
+    },
+    "136": {
+      "id": "136",
+      "name": "Slap Around",
+      "rarity": "silver"
+    },
+    "307": {
+      "id": "307",
+      "name": "Sleep Dart",
+      "rarity": "gold"
+    },
+    "232": {
+      "id": "232",
+      "name": "Slime Time",
+      "rarity": "silver"
+    },
+    "250": {
+      "id": "250",
+      "name": "Slow and Steady",
+      "rarity": "gold"
+    },
+    "75": {
+      "id": "75",
+      "name": "Slow Cooker",
+      "rarity": "prismatic"
+    },
+    "176": {
+      "id": "176",
+      "name": "Snowball Fight!",
+      "rarity": "silver"
+    },
+    "76": {
+      "id": "76",
+      "name": "Sonic Boom",
+      "rarity": "silver"
+    },
+    "77": {
+      "id": "77",
+      "name": "Soul Siphon",
+      "rarity": "gold"
+    },
+    "135": {
+      "id": "135",
+      "name": "Spellwake",
+      "rarity": "prismatic"
+    },
+    "214": {
+      "id": "214",
+      "name": "Spin To Win",
+      "rarity": "silver"
+    },
+    "326": {
+      "id": "326",
+      "name": "Spirit Infusion",
+      "rarity": "silver"
+    },
+    "78": {
+      "id": "78",
+      "name": "Spirit Link",
+      "rarity": "prismatic"
+    },
+    "204": {
+      "id": "204",
+      "name": "Stackosaurus Rex",
+      "rarity": "silver"
+    },
+    "226": {
+      "id": "226",
+      "name": "Stats!",
+      "rarity": "silver"
+    },
+    "227": {
+      "id": "227",
+      "name": "Stats on Stats!",
+      "rarity": "gold"
+    },
+    "228": {
+      "id": "228",
+      "name": "Stats on Stats on Stats!",
+      "rarity": "prismatic"
+    },
+    "223": {
+      "id": "223",
+      "name": "Summoner Revolution",
+      "rarity": "gold"
+    },
+    "123": {
+      "id": "123",
+      "name": "Summoner's Roulette",
+      "rarity": "prismatic"
+    },
+    "239": {
+      "id": "239",
+      "name": "Symbiotic Mutation",
+      "rarity": "gold"
+    },
+    "79": {
+      "id": "79",
+      "name": "Symphony of War",
+      "rarity": "prismatic"
+    },
+    "313": {
+      "id": "313",
+      "name": "Tank Engine",
+      "rarity": "gold"
+    },
+    "80": {
+      "id": "80",
+      "name": "Tank It Or Leave It",
+      "rarity": "silver"
+    },
+    "81": {
+      "id": "81",
+      "name": "Tap Dancer",
+      "rarity": "prismatic"
+    },
+    "82": {
+      "id": "82",
+      "name": "The Brutalizer",
+      "rarity": "silver"
+    },
+    "83": {
+      "id": "83",
+      "name": "Thief's Gloves",
+      "rarity": "prismatic"
+    },
+    "84": {
+      "id": "84",
+      "name": "Thread the Needle",
+      "rarity": "gold"
+    },
+    "85": {
+      "id": "85",
+      "name": "Tormentor",
+      "rarity": "silver"
+    },
+    "221": {
+      "id": "221",
+      "name": "Trailblazer",
+      "rarity": "silver"
+    },
+    "243": {
+      "id": "243",
+      "name": "Transmute: Chaos",
+      "rarity": "prismatic"
+    },
+    "237": {
+      "id": "237",
+      "name": "Transmute: Gold",
+      "rarity": "silver"
+    },
+    "238": {
+      "id": "238",
+      "name": "Transmute: Prismatic",
+      "rarity": "gold"
+    },
+    "236": {
+      "id": "236",
+      "name": "Trickster Demon",
+      "rarity": "gold"
+    },
+    "86": {
+      "id": "86",
+      "name": "Trueshot Prodigy",
+      "rarity": "prismatic"
+    },
+    "107": {
+      "id": "107",
+      "name": "Twice Thrice",
+      "rarity": "gold"
+    },
+    "87": {
+      "id": "87",
+      "name": "Typhoon",
+      "rarity": "silver"
+    },
+    "88": {
+      "id": "88",
+      "name": "Ultimate Revolution",
+      "rarity": "prismatic"
+    },
+    "233": {
+      "id": "233",
+      "name": "Ultimate Roulette",
+      "rarity": "prismatic"
+    },
+    "112": {
+      "id": "112",
+      "name": "Ultimate Unstoppable",
+      "rarity": "silver"
+    },
+    "327": {
+      "id": "327",
+      "name": "Undying Guard",
+      "rarity": "gold"
+    },
+    "314": {
+      "id": "314",
+      "name": "Unshackled",
+      "rarity": "gold"
+    },
+    "89": {
+      "id": "89",
+      "name": "Vanish",
+      "rarity": "gold"
+    },
+    "90": {
+      "id": "90",
+      "name": "Vengeance",
+      "rarity": "gold"
+    },
+    "91": {
+      "id": "91",
+      "name": "Virtuous Cycle",
+      "rarity": "silver"
+    },
+    "92": {
+      "id": "92",
+      "name": "Vulnerability",
+      "rarity": "gold"
+    },
+    "93": {
+      "id": "93",
+      "name": "Warmup Routine",
+      "rarity": "silver"
+    },
+    "312": {
+      "id": "312",
+      "name": "We'll Be Right Back",
+      "rarity": "gold"
+    },
+    "94": {
+      "id": "94",
+      "name": "Willing Sacrifice",
+      "rarity": "gold"
+    },
+    "95": {
+      "id": "95",
+      "name": "Windspeaker's Blessing",
+      "rarity": "prismatic"
+    },
+    "96": {
+      "id": "96",
+      "name": "Wisdom of Ages",
+      "rarity": "prismatic"
+    },
+    "97": {
+      "id": "97",
+      "name": "Witchful Thinking",
+      "rarity": "silver"
+    },
+    "98": {
+      "id": "98",
+      "name": "With Haste",
+      "rarity": "gold"
+    },
+    "99": {
+      "id": "99",
+      "name": "Zhonya's Epiphany",
+      "rarity": "prismatic"
+    },
+    "206": {
+      "id": "206",
+      "name": "escAPADe",
+      "rarity": "silver"
+    }
+  }
+}

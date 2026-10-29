@@ -5,11 +5,12 @@ import threading
 import time
 
 from .capture import CaptureReader
-from .client import ClientReader, is_aram_mode, is_tft_mode
+from .client import ClientReader, is_aram_mode, is_tft_mode, is_arena_mode
 from .data import RETRY_DELAY, StatsProvider
 from .game import poll_active_player
 from .matching import detect_offers
 from .tft_data import TftProvider
+from .arena_data import ArenaProvider
 
 
 class Worker(threading.Thread):
@@ -33,6 +34,16 @@ class Worker(threading.Thread):
         self.cache = cache
         self.tft_requests = queue.Queue()
         self.tft_thread = None
+        self.arena_provider = None
+        self.arena_pending = {}
+        self.arena_lock = threading.Lock()
+        self.arena_ready = threading.Event()
+        self.arena_thread = None
+        self.arena_catalog_results = queue.Queue()
+        self.arena_catalog = None
+        self.arena_catalog_token = None
+        self.scan_mode = "aram"
+        self.arena_scan_champion = None
         self.champion_provider = None
         self.champion_retry_at = 0.0
         self.champion_requests = queue.Queue(maxsize=1)
@@ -63,6 +74,51 @@ class Worker(threading.Thread):
                 self.emit("catalog", self.catalog)
         except queue.Empty:
             pass
+        try:
+            while True:
+                token, self.arena_catalog = self.arena_catalog_results.get_nowait()
+                self.arena_catalog_token = token
+                self.emit("arena", (token, self.arena_catalog))
+                if self.scan_mode == "arena":
+                    self.force_offer_emit = True
+                    self.pending_offers = ()
+                    self.empty_since, self.empty_frames = None, 0
+        except queue.Empty:
+            pass
+
+    def perform_arena_task(self, task, payload):
+        try:
+            if self.arena_provider is None:
+                self.arena_provider = ArenaProvider(self.cache)
+            if task == "arena":
+                self.arena_catalog_results.put((payload[0], self.arena_provider.load(force=payload[1])))
+            else:
+                token, champion, force = payload
+                self.emit("arena_champion", (token, champion, self.arena_provider.champion_for(champion, force=force)))
+        except Exception as exc:
+            if task == "arena":
+                self.emit("arena_error", (payload[0], str(exc)))
+            else:
+                self.emit("arena_champion_error", (payload[0], payload[1], str(exc)))
+
+    def run_arena_data(self):
+        while not self.stop.is_set():
+            if not self.arena_ready.wait(0.2) or self.stop.is_set():
+                continue
+            with self.arena_lock:
+                task = next(iter(self.arena_pending))
+                payload = self.arena_pending.pop(task)
+                if not self.arena_pending:
+                    self.arena_ready.clear()
+            self.perform_arena_task(task, payload)
+
+    def queue_arena_task(self, task, payload):
+        with self.arena_lock:
+            self.arena_pending[task] = payload
+            self.arena_ready.set()
+        if self.arena_thread is None:
+            self.arena_thread = threading.Thread(target=self.run_arena_data, name="mayhem-arena-data", daemon=True)
+            self.arena_thread.start()
 
     def perform_aram_task(self, task, payload):
         try:
@@ -222,6 +278,16 @@ class Worker(threading.Thread):
             # Keep ARAM context while the game loads or reconnects.
             return selection
         game["phase"] = phase
+        live_mode = game.get("game_mode")
+        if ((selection.get("is_arena") is True and live_mode and not is_arena_mode(live_mode))
+                or (is_arena_mode(live_mode) and selection.get("is_arena") is False)):
+            # A previous match's live API can linger during loading.
+            return selection
+        if selection.get("is_arena") is not None or is_arena_mode(live_mode):
+            game["is_arena"] = (selection["is_arena"] if selection.get("is_arena") is not None
+                                else is_arena_mode(live_mode))
+        if game.get("is_arena") is True and "queue_id" in selection:
+            game["queue_id"] = selection["queue_id"]
         if is_tft_mode(game.get("game_mode")):
             if selection.get("is_tft") is False:
                 # A previous game's local API can linger during a new game's
@@ -260,6 +326,8 @@ class Worker(threading.Thread):
                         self.queue_aram_task(task, payload)
                     elif task in ("tft", "tft_items"):
                         self.queue_tft_task(task, payload)
+                    elif task in ("arena", "arena_champion"):
+                        self.queue_arena_task(task, payload)
                     elif task == "champions":
                         self.queue_champion_task(payload)
             except queue.Empty:
@@ -286,19 +354,38 @@ class Worker(threading.Thread):
                              or self.last_game.get("phase") in ("Matchmaking", "ReadyCheck", "ChampSelect"))
                 self.next_poll = time.monotonic() + (self.SELECT_POLL_SECONDS if selecting
                                                       else self.DEFAULT_POLL_SECONDS)
-            if not (self.enabled and self.catalog and self.last_game
+            scan_mode = "arena" if self.last_game and self.last_game.get("is_arena") is True else "aram"
+            scan_champion = (self.last_game.get("champion_id") or self.last_game.get("raw_champion")
+                             or self.last_game.get("champion_name")) if self.last_game else None
+            if (scan_mode != self.scan_mode or (scan_mode == "arena" and
+                    scan_champion != self.arena_scan_champion)):
+                self.emit("arena_offers" if self.scan_mode == "arena" else "offers",
+                          (self.arena_catalog_token, []) if self.scan_mode == "arena" else [])
+                self.last_offers = self.pending_offers = ()
+                self.empty_since, self.empty_frames = None, 0
+                self.next_scan = 0
+                self.scan_mode = scan_mode
+            self.arena_scan_champion = scan_champion if scan_mode == "arena" else None
+            scan_catalog = self.arena_catalog if scan_mode == "arena" else self.catalog
+            def emit_scan(kind, payload):
+                if scan_mode == "arena":
+                    self.emit("arena_" + kind, (self.arena_catalog_token, payload)
+                              if kind == "offers" else payload)
+                else:
+                    self.emit(kind, payload)
+            if not (self.enabled and scan_catalog and self.last_game
                     and self.last_game.get("status") == "live"
-                    and self.last_game.get("is_aram") is True):
+                    and (self.last_game.get("is_aram") is True or self.last_game.get("is_arena") is True)):
                 self.empty_since, self.empty_frames = None, 0
                 if self.last_offers:
                     self.last_offers = self.pending_offers = ()
-                    self.emit("offers", [])
+                    emit_scan("offers", [])
                 continue
             if now < self.next_scan:
                 continue
             scan_delay = self.ACTIVE_SCAN_SECONDS
             try:
-                result = self.capture.scan()
+                result = self.capture.scan(mode="arena") if scan_mode == "arena" else self.capture.scan()
                 if result.get("status") != "ok":
                     self.pending_offers = ()
                     self.empty_since, self.empty_frames = None, 0
@@ -307,17 +394,17 @@ class Worker(threading.Thread):
                         message = "Scan paused · focus League to resume."
                         if self.last_offers:
                             message += " Showing last recognized choices."
-                        self.emit("scan_status", message)
+                        emit_scan("scan_status", message)
                         continue
                     message = result.get("message", "Game capture unavailable.")
                     if self.last_offers:
                         message += " Showing last recognized choices."
-                    self.emit("scan_status", message)
+                    emit_scan("scan_status", message)
                     if result.get("status") == "error":
                         scan_delay = 10
                     continue
-                offers = detect_offers(result["lines"], self.catalog["augments"])
-                self.emit("scan_status", f"{len(offers)} titles recognized · left to right" if offers
+                offers = detect_offers(result["lines"], scan_catalog["augments"])
+                emit_scan("scan_status", f"{len(offers)} titles recognized · left to right" if offers
                           else "No augment choices recognized. Keep the three cards visible.")
                 signature = tuple(str(x["id"]) for x in offers)
                 if signature:
@@ -328,7 +415,7 @@ class Worker(threading.Thread):
                             and (signature != self.last_offers or self.force_offer_emit)):
                         self.last_offers = signature
                         self.force_offer_emit = False
-                        self.emit("offers", offers)
+                        emit_scan("offers", offers)
                     self.pending_offers = signature
                 else:
                     self.pending_offers = ()
@@ -343,14 +430,14 @@ class Worker(threading.Thread):
                             and now - self.empty_since >= self.OFFER_GONE_SECONDS):
                         self.last_offers = ()
                         self.force_offer_emit = False
-                        self.emit("offers", [])
+                        emit_scan("offers", [])
                     scan_delay = (self.ACTIVE_SCAN_SECONDS if self.last_offers or self.force_offer_emit
                                   else self.IDLE_SCAN_SECONDS)
             except Exception as exc:
                 self.pending_offers = ()
                 self.empty_since, self.empty_frames = None, 0
                 logging.exception("OCR failed")
-                self.emit("scan_status", f"OCR unavailable: {exc}. Manual search still works.")
+                emit_scan("scan_status", f"OCR unavailable: {exc}. Manual search still works.")
                 scan_delay = 10
             finally:
                 # Capture/OCR can take longer than the interval. Always leave

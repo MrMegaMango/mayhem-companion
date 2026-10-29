@@ -76,6 +76,18 @@ class IconLoaderTests(unittest.TestCase):
                     valid.replace("data.aramkit.com/", "data.aramkit.com.evil.test/")):
             self.assertFalse(loader.request(url), url)
 
+    def test_arena_icons_are_limited_to_verified_source_asset_paths(self):
+        loader, _, _ = self.loader(start=False)
+        valid = ("https://winrate.lol/img/w64/champion/MonkeyKing.jpg",
+                 "https://winrate.lol/img/w128/item/3031.jpg",
+                 "https://winrate.lol/img/augment/41.png")
+        for url in valid:
+            self.assertTrue(loader.request(url), url)
+            for invalid in (url + "?redirect=x", url.replace("https:", "http:"),
+                            url.replace("winrate.lol/", "winrate.lol.evil.test/"),
+                            url.replace("/img/", "/img/../")):
+                self.assertFalse(loader.request(invalid), invalid)
+
     def test_slow_network_never_blocks_other_requests(self):
         entered, release = threading.Event(), threading.Event()
         def download(url):

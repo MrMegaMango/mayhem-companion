@@ -228,5 +228,36 @@ class WrappedTitleTests(unittest.TestCase):
         self.assertEqual(match_augments(["Windspeaker's", "Blessing"], CATALOG), [])
 
 
+class ArenaOfferTests(unittest.TestCase):
+    # Names are intentionally restricted to the Arena augment catalog.
+    CATALOG = {"gauntlet": "Jeweled Gauntlet", "goliath": "Goliath",
+               "duality": "Master of Duality"}
+
+    @staticmethod
+    def title(text, x, y=498):
+        # Riot 16.21 Cherry AugmentSelection/UIBase title region in its
+        # 1600x1200 reference frame, with the managed cards laid horizontally.
+        return {"text": text, "x": x / 1600, "y": y / 1200,
+                "width": 288 / 1600, "height": 33 / 1200}
+
+    def test_arena_titles_return_left_to_right_without_level_star_numbers(self):
+        lines = [self.title("Master of Duality", 1080),
+                 self.title("Jeweled Gauntlet", 232), self.title("Goliath", 656),
+                 self.title("II", 777, 266)]
+        self.assertEqual([row["id"] for row in detect_offers(lines, self.CATALOG)],
+                         ["gauntlet", "goliath", "duality"])
+
+    def test_arena_item_anvils_do_not_match_augment_catalog(self):
+        lines = [self.title("Reality Fracture", 232),
+                 self.title("Dragonheart", 656), self.title("Demon King's Crown", 1080)]
+        self.assertEqual(detect_offers(lines, self.CATALOG), [])
+
+    def test_unknown_arena_title_is_omitted_without_global_or_mayhem_substitution(self):
+        lines = [self.title("Jeweled Gauntlet", 232),
+                 self.title("Unknown Arena Augment", 656), self.title("Goliath", 1080)]
+        self.assertEqual([row["id"] for row in detect_offers(lines, self.CATALOG)],
+                         ["gauntlet", "goliath"])
+
+
 if __name__ == "__main__":
     unittest.main()

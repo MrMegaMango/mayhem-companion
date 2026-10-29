@@ -78,6 +78,10 @@ class StateTests(unittest.TestCase):
         app.tft_item_token = 0
         app.tft_unit = None
         app.tft_loaded = app.tft_pending = False
+        app.arena_token = app.arena_champion_token = 0
+        app.arena_champion = None
+        app.arena_pending = False
+        app.arena_panel = Mock()
         app.mode_choice = Mock()
         app.mode_choice.get.return_value = "Auto"
         app.tft_panel, app.brand, app.body = Mock(), Mock(), Mock()

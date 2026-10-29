@@ -76,6 +76,14 @@ class CaptureReader:
     # Includes the card headings and excludes most of the HUD and chat area.
     CROP = (0.04, 0.08, 0.96, 0.85)
     TITLE_BAND = (0.15, 0.34, 0.85, 0.465)
+    # Riot's 16.21 Cherry AugmentSelection/UIBase places the title at
+    # (656, 498), size (288, 33), in a 1600x1200 reference frame. The
+    # horizontally managed card row spans x=194..1406. Include the complete
+    # outer title boxes, including long wrapped names, while keeping the
+    # description (y=585) and level-star row (y=266) outside the first read.
+    # Source: raw.communitydragon.org/16.21/game/clientstates/gameplay/ux/
+    # lol/cherry/augmentselection/uibase.cdtb.bin.json
+    ARENA_TITLE_BAND = (0.12, 0.34, 0.88, 0.465)
 
     def __init__(self) -> None:
         self._engine = None
@@ -319,8 +327,10 @@ class CaptureReader:
             return None
         return hwnd, (origin.x, origin.y, origin.x + width, origin.y + height)
 
-    def scan(self) -> dict[str, Any]:
-        """Read only the focused game; otherwise return waiting without capture."""
+    def scan(self, *, mode: str = "aram") -> dict[str, Any]:
+        """Read a supported mode's focused game; never capture another app."""
+        if mode not in ("aram", "arena"):
+            return _result("error", "This game mode has no automatic title reader.")
         prior_dpi_context = None
         user32 = None
         try:
@@ -335,7 +345,8 @@ class CaptureReader:
             width, height = right - left, bottom - top
             # Capture the title band itself, not a desktop-sized image cropped
             # afterwards. Only a successful empty read needs the wider layout.
-            for fractions in (self.TITLE_BAND, self.CROP):
+            title_band = self.ARENA_TITLE_BAND if mode == "arena" else self.TITLE_BAND
+            for fractions in (title_band, self.CROP):
                 read_crop = tuple(round(size * fraction) for size, fraction in
                                   zip((width, height, width, height), fractions))
                 if user32.GetForegroundWindow() != hwnd:

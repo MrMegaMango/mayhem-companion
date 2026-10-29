@@ -124,6 +124,36 @@ class CaptureStateTests(unittest.TestCase):
         self.assertEqual(reader.scan()["status"], "error")
         reader.grab.assert_called_once()
 
+    def test_arena_uses_complete_outer_title_boxes_and_normalized_coordinates(self):
+        reader, _ = self.make_reader()
+        # Current Cherry UIBase has a 1600x1200 reference resolution, title
+        # y=498..531, and 288px title boxes offset 38px within each card.
+        reader._game_rectangle.return_value = (7, (0, 0, 1600, 1200))
+        reader.recognize_image.return_value = {"status": "ok", "lines": [
+            {"text": "Jeweled Gauntlet", "x": (232 - 192) / 1216,
+             "y": (498 - 408) / 150, "width": 288 / 1216, "height": 33 / 150}]}
+        result = reader.scan(mode="arena")
+        reader.grab.assert_called_once_with((192, 408, 1408, 558))
+        title = result["lines"][0]
+        self.assertAlmostEqual(title["x"], 232 / 1600)
+        self.assertAlmostEqual(title["y"], 498 / 1200)
+        self.assertAlmostEqual(title["width"], 288 / 1600)
+        self.assertAlmostEqual(title["height"], 33 / 1200)
+        self.assertEqual(result["size"], [1600, 1200])
+
+    def test_arena_empty_title_band_retains_fallback_and_focus_guards(self):
+        reader, user32 = self.make_reader()
+        user32.GetForegroundWindow.side_effect = [7, 7, 8]
+        self.assertEqual(reader.scan(mode="arena")["status"], "waiting")
+        reader.grab.assert_called_once_with((230, 367, 1690, 502))
+        reader.recognize_image.assert_called_once()
+
+    def test_unknown_mode_never_captures(self):
+        reader, _ = self.make_reader()
+        self.assertEqual(reader.scan(mode="unknown")["status"], "error")
+        reader._load_windows.assert_not_called()
+        reader.grab.assert_not_called()
+
     def test_negative_monitor_origin_is_added_to_capture_not_result(self):
         reader, _ = self.make_reader()
         reader._game_rectangle.return_value = (7, (-1920, -1080, 0, 0))

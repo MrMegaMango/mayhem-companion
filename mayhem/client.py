@@ -48,6 +48,10 @@ _SPELL_NAMES = {identifier: name for identifier, name in _SPELLS_BY_RAW_ID.value
 # Riot's queues.json identifies these ARAM queues, including Mayhem (2400).
 # A custom queue (0), or Howling Abyss map alone, does not identify ARAM.
 _ARAM_QUEUE_IDS = frozenset((65, 67, 100, 450, 720, 2400))
+# Riot's public queues.json lists 1700/1710. The running client's queue
+# metadata also identifies 1704 (PBE), 1740 (Bravery) and 1750 (3x6) as CHERRY.
+# Recognize these exact queues, never an entire numeric range or map alone.
+_ARENA_QUEUE_IDS = frozenset((1700, 1704, 1710, 1740, 1750))
 # Riot's TFT Data Dragon 16.21.1 tft-queues.json plus public queues.json
 # identify these TFT queues. Never infer TFT from a numeric range or map ID.
 _TFT_QUEUE_IDS = frozenset((
@@ -59,6 +63,8 @@ _TFT_QUEUE_IDS = frozenset((
 _TFT_MODES = frozenset(("TFT",))
 # KIWI was verified in the local Live Client API during a Mayhem custom game.
 _ARAM_MODES = frozenset(("ARAM", "KIWI"))
+# Verified in /lol-game-queues/v1/queues; gameModes.json currently omits Arena.
+_ARENA_MODES = frozenset(("CHERRY",))
 # Public gameModes.json provides these non-ARAM mode tokens. Unknown future
 # modes remain unknown rather than accidentally inheriting an earlier game.
 _OTHER_MODES = frozenset((
@@ -79,8 +85,13 @@ def is_tft_mode(mode: Any) -> bool:
     return isinstance(mode, str) and mode.strip().upper() in _TFT_MODES
 
 
+def is_arena_mode(mode: Any) -> bool:
+    """Recognize the verified Arena token; never use partial name matches."""
+    return isinstance(mode, str) and mode.strip().upper() in _ARENA_MODES
+
+
 def _gameflow_context(session: Any) -> dict[str, Any]:
-    result = {"is_aram": None, "is_tft": None, "game_mode": None}
+    result = {"is_aram": None, "is_tft": None, "is_arena": None, "game_mode": None}
     if not isinstance(session, Mapping):
         return result
     game = session.get("gameData")
@@ -93,14 +104,21 @@ def _gameflow_context(session: Any) -> dict[str, Any]:
             continue
         mode = source.get("gameMode")
         mode = mode.strip().upper() if isinstance(mode, str) else None
-        if mode in _ARAM_MODES or mode in _TFT_MODES or mode in _OTHER_MODES:
-            result.update(is_aram=is_aram_mode(mode), is_tft=is_tft_mode(mode), game_mode=mode)
+        if (mode in _ARAM_MODES or mode in _TFT_MODES or mode in _ARENA_MODES
+                or mode in _OTHER_MODES):
+            result.update(is_aram=is_aram_mode(mode), is_tft=is_tft_mode(mode),
+                          is_arena=is_arena_mode(mode), game_mode=mode)
+            if (result["is_arena"] and type(queue.get("id")) is int
+                    and 0 <= queue["id"] <= 2**31 - 1):
+                result["queue_id"] = queue["id"]
             return result
     if type(queue.get("id")) is int:
         if queue["id"] in _ARAM_QUEUE_IDS:
-            result.update(is_aram=True, is_tft=False)
+            result.update(is_aram=True, is_tft=False, is_arena=False)
         elif queue["id"] in _TFT_QUEUE_IDS:
-            result.update(is_aram=False, is_tft=True)
+            result.update(is_aram=False, is_tft=True, is_arena=False)
+        elif queue["id"] in _ARENA_QUEUE_IDS:
+            result.update(is_aram=False, is_tft=False, is_arena=True, queue_id=queue["id"])
     return result
 
 
@@ -194,7 +212,7 @@ def _get_json(opener, credentials: _Credentials, path: str, timeout: float) -> A
 def _client_state(status: str, message: str, phase: str | None = None) -> dict[str, Any]:
     result = _state(status, message)
     result.update(phase=phase if phase in _KNOWN_PHASES else None,
-                  champion_preview=False, is_aram=None, is_tft=None,
+                  champion_preview=False, is_aram=None, is_tft=None, is_arena=None,
                   available_champion_ids=None, available_champion_sources={},
                   availability_incomplete=False)
     return result
@@ -441,7 +459,7 @@ class ClientReader:
             self._needs_discovery = True
             return _client_state("waiting", "Waiting for the League client.")
         phase = None
-        context = {"is_aram": None, "is_tft": None, "game_mode": None}
+        context = {"is_aram": None, "is_tft": None, "is_arena": None, "game_mode": None}
 
         def finish(result):
             result.update(context)
