@@ -487,41 +487,37 @@ class StateTests(unittest.TestCase):
 
     def test_start_with_league_configures_on_helper_thread_and_reports_result(self):
         app = self.make_view()
-        with patch("mayhem.autostart.is_enabled", side_effect=[False, True]), \
+        with patch("mayhem.autostart.is_enabled", return_value=False), \
                 patch("mayhem.app.threading.Thread") as thread, \
-                patch("mayhem.app.subprocess.run", return_value=Mock(returncode=0)) as run:
+                patch("mayhem.autostart.configure_startup", return_value=True) as configure:
             app.handle_event("tray_action", "toggle_autostart")
             self.assertTrue(app._autostart_busy)
             thread.return_value.start.assert_called_once()
-            run.assert_not_called()
+            configure.assert_not_called()
             thread.call_args.kwargs["target"]()
-        command = run.call_args.args[0]
-        self.assertIn("//B", command)
-        self.assertIn(str(app.storage / "Configure-Autostart.vbs"), command)
-        self.assertNotIn("disable", command)
-        self.assertNotIn("-ExecutionPolicy", command)
+        configure.assert_called_once_with(True, app.storage)
         self.assertEqual(app.events.get_nowait(), ("autostart_result", (True, True)))
         app.handle_event("autostart_result", (True, True))
         self.assertFalse(app._autostart_busy)
 
     def test_disable_start_with_league_and_ignore_repeated_click_while_busy(self):
         app = self.make_view()
-        with patch("mayhem.autostart.is_enabled", side_effect=[True, False]) as enabled, \
+        with patch("mayhem.autostart.is_enabled", return_value=True) as enabled, \
                 patch("mayhem.app.threading.Thread") as thread, \
-                patch("mayhem.app.subprocess.run", return_value=Mock(returncode=0)) as run:
+                patch("mayhem.autostart.configure_startup", return_value=True) as configure:
             app.toggle_autostart()
             app.toggle_autostart()
             thread.assert_called_once()
             self.assertEqual(enabled.call_count, 1)
             thread.call_args.kwargs["target"]()
-        self.assertEqual(run.call_args.args[0][-1], "disable")
+        configure.assert_called_once_with(False, app.storage)
         self.assertEqual(app.events.get_nowait(), ("autostart_result", (True, False)))
 
     def test_startup_config_failure_is_reported_and_releases_busy_state(self):
         app = self.make_view()
         with patch("mayhem.autostart.is_enabled", return_value=False), \
                 patch("mayhem.app.threading.Thread") as thread, \
-                patch("mayhem.app.subprocess.run", side_effect=OSError("fixture")):
+                patch("mayhem.autostart.configure_startup", return_value=False):
             app.toggle_autostart()
             thread.call_args.kwargs["target"]()
         kind, payload = app.events.get_nowait()

@@ -1,7 +1,8 @@
 """Small Windows process-name watcher for starting the companion with League.
 
 This module is intentionally stdlib-only: no UI, game APIs, credentials, or
-process-memory access. It never creates or changes the Startup shortcut.
+process-memory access. Only explicit configuration calls change Startup;
+the watcher itself only reads the shortcut's enabled state.
 """
 from __future__ import annotations
 
@@ -25,6 +26,45 @@ _TH32CS_SNAPPROCESS = 0x00000002
 _ERROR_NO_MORE_FILES = 18
 _ERROR_ALREADY_EXISTS = 183
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+_SHORTCUT_SKIPPED = 10
+
+# Paths are passed as environment data, never interpolated into PowerShell.
+# WScript.Shell is provided by Windows, so frozen builds need no COM package
+# or loose configuration script beside their executable.
+_FROZEN_SHORTCUT_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$mayhemLinkPath = $env:MAYHEM_STARTUP_LINK
+$mayhemTarget = $env:MAYHEM_STARTUP_EXE
+$mayhemMode = $env:MAYHEM_STARTUP_MODE
+$mayhemShell = New-Object -ComObject WScript.Shell
+if (Test-Path -LiteralPath $mayhemLinkPath) {
+    $mayhemExisting = $mayhemShell.CreateShortcut($mayhemLinkPath)
+    $mayhemOwned = [String]::Equals($mayhemExisting.TargetPath, $mayhemTarget,
+        [StringComparison]::OrdinalIgnoreCase) -and $mayhemExisting.Arguments -eq '--watch-league'
+    $mayhemLegacy = $mayhemMode -ne 'cleanup' -and
+        [String]::Equals($mayhemExisting.TargetPath, $env:MAYHEM_LEGACY_PYTHON,
+        [StringComparison]::OrdinalIgnoreCase) -and $mayhemExisting.Arguments -eq '-m mayhem.autostart'
+    if (-not $mayhemOwned -and -not $mayhemLegacy) {
+        if ($mayhemMode -eq 'cleanup') { exit 10 }
+        exit 3
+    }
+} elseif ($mayhemMode -eq 'cleanup') {
+    exit 10
+}
+if ($mayhemMode -ne 'enable') {
+    if (Test-Path -LiteralPath $mayhemLinkPath) { [IO.File]::Delete($mayhemLinkPath) }
+    exit 0
+}
+if (-not (Test-Path -LiteralPath $mayhemTarget -PathType Leaf)) { exit 4 }
+$mayhemLink = $mayhemShell.CreateShortcut($mayhemLinkPath)
+$mayhemLink.TargetPath = $mayhemTarget
+$mayhemLink.Arguments = '--watch-league'
+$mayhemLink.WorkingDirectory = [IO.Path]::GetDirectoryName($mayhemTarget)
+$mayhemLink.Description = 'Start Mayhem Companion when the League client opens'
+$mayhemLink.IconLocation = $mayhemTarget + ',0'
+$mayhemLink.WindowStyle = 7
+$mayhemLink.Save()
+"""
 
 
 class _ProcessEntry32W(ctypes.Structure):
@@ -112,19 +152,126 @@ def is_enabled() -> bool:
         return False
 
 
-def launch_companion() -> None:
+def companion_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--auto-start"]
+    return [sys.executable, "-m", "mayhem", "--auto-start"]
+
+
+def watcher_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--watch-league"]
+    return [sys.executable, "-m", "mayhem.autostart"]
+
+
+def runtime_directory() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def _launch_hidden(command: list[str]) -> None:
     if sys.platform != "win32":
         raise OSError("Automatic League startup is available on Windows only")
     startup = subprocess.STARTUPINFO()
     startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0  # SW_HIDE: do not flash a console when launching.
     subprocess.Popen(
-        [sys.executable, "-m", "mayhem", "--auto-start"],
-        cwd=str(Path(__file__).resolve().parent.parent),
+        command,
+        cwd=str(runtime_directory()),
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         startupinfo=startup, creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True, shell=False,
     )
+
+
+def launch_companion() -> None:
+    _launch_hidden(companion_command())
+
+
+def _configure_frozen_shortcut(mode: str, storage: Path) -> int:
+    environment = dict(os.environ)
+    environment.update({
+        "MAYHEM_STARTUP_LINK": str(startup_shortcut_path()),
+        "MAYHEM_STARTUP_EXE": str(Path(sys.executable).resolve()),
+        "MAYHEM_STARTUP_MODE": mode,
+        "MAYHEM_LEGACY_PYTHON": str(storage.resolve() / ".venv" / "Scripts" / "pythonw.exe"),
+    })
+    powershell = (Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" /
+                  "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    result = subprocess.run(
+        [str(powershell), "-NoProfile", "-NonInteractive", "-Command", _FROZEN_SHORTCUT_SCRIPT],
+        env=environment, stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return result.returncode
+
+
+def _wait_for_watcher_exit(timeout: float = 5.0) -> bool:
+    """Let a disabled watcher release its mutex before another can start.
+
+    Removing its shortcut does not wake a sleeping watcher. Waiting here
+    prevents a quick off/on transition from leaving the old watcher running.
+    This only observes our mutex and never terminates a process.
+    """
+    native = _NativeWindows()
+    deadline = time.monotonic() + timeout
+    while True:
+        handle = native.acquire_mutex()
+        if handle is not None:
+            native.close_handle(handle)
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.1, remaining))
+
+
+def configure_startup(enable: bool, storage: Path) -> bool:
+    """Change this user's opt-in setting and start an enabled watcher now.
+
+    Frozen installs target their installed executable. Source installs retain
+    the existing configuration script and its ownership checks.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        if getattr(sys, "frozen", False):
+            result = _configure_frozen_shortcut("enable" if enable else "disable", storage)
+            if result != 0 or is_enabled() != enable:
+                return False
+            if enable:
+                _launch_hidden(watcher_command())
+                return True
+            return _wait_for_watcher_exit()
+        command = [str(Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" / "cscript.exe"),
+                   "//B", "//NoLogo", str(storage / "Configure-Autostart.vbs"), str(storage)]
+        if not enable:
+            command.append("disable")
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return (result.returncode == 0 and is_enabled() == enable
+                and (enable or _wait_for_watcher_exit()))
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def remove_owned_startup() -> bool:
+    """Uninstall cleanup: only remove this exact frozen executable's shortcut.
+
+    A legacy or other installation's shortcut is safely left in place and is
+    considered a successful no-op. The watcher notices removal and exits.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return False
+    try:
+        result = _configure_frozen_shortcut("cleanup", Path.home() / "MayhemCompanion")
+        if result == _SHORTCUT_SKIPPED:
+            return True
+        return result == 0 and _wait_for_watcher_exit()
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def run_watcher(*, process_source: Callable[[], bool],

@@ -91,6 +91,124 @@ class StartupAndLaunchTests(unittest.TestCase):
         for stream in ("stdin", "stdout", "stderr"):
             self.assertEqual(options[stream], subprocess.DEVNULL)
 
+    def test_frozen_launch_targets_the_executable_not_the_extraction_directory(self):
+        startup = MagicMock(dwFlags=0)
+        executable = str(Path(tempfile.gettempdir()) / "Program Folder" / "MayhemCompanion.exe")
+        with patch.object(autostart.sys, "platform", "win32"), \
+                patch.object(autostart.sys, "frozen", True, create=True), \
+                patch.object(autostart.sys, "executable", executable), \
+                patch.object(autostart.subprocess, "STARTUPINFO", return_value=startup, create=True), \
+                patch.object(autostart.subprocess, "STARTF_USESHOWWINDOW", 1, create=True), \
+                patch.object(autostart.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+                patch.object(autostart.subprocess, "Popen") as popen:
+            autostart.launch_companion()
+            self.assertEqual(autostart.watcher_command(), [executable, "--watch-league"])
+        self.assertEqual(popen.call_args.args[0], [executable, "--auto-start"])
+        self.assertEqual(Path(popen.call_args.kwargs["cwd"]), Path(executable).resolve().parent)
+        self.assertFalse(popen.call_args.kwargs["shell"])
+
+    def test_source_watcher_retains_python_module_entrypoint(self):
+        with patch.object(autostart.sys, "frozen", False, create=True):
+            self.assertEqual(autostart.watcher_command(), [sys.executable, "-m", "mayhem.autostart"])
+
+    def test_source_configuration_preserves_vbs_enable_and_disable_contract(self):
+        storage = Path(tempfile.gettempdir()) / "source installation"
+        for enable in (True, False):
+            with self.subTest(enable=enable), patch.object(autostart.sys, "platform", "win32"), \
+                    patch.object(autostart.sys, "frozen", False, create=True), \
+                    patch.object(autostart, "is_enabled", return_value=enable), \
+                    patch.object(autostart, "_wait_for_watcher_exit", return_value=True) as wait, \
+                    patch.object(autostart.subprocess, "run", return_value=MagicMock(returncode=0)) as run:
+                self.assertTrue(autostart.configure_startup(enable, storage))
+            command = run.call_args.args[0]
+            self.assertEqual(command[1:5], ["//B", "//NoLogo", str(storage / "Configure-Autostart.vbs"), str(storage)])
+            self.assertEqual(command[5:], [] if enable else ["disable"])
+            self.assertNotIn("-ExecutionPolicy", command)
+            self.assertEqual(wait.call_count, 0 if enable else 1)
+
+    def test_frozen_configuration_passes_paths_as_data_and_starts_only_an_enabled_watcher(self):
+        storage = Path(tempfile.gettempdir()) / "storage ' $quoted"
+        executable = str(storage / "MayhemCompanion.exe")
+        shortcut = storage / autostart.STARTUP_SHORTCUT_NAME
+        for enable in (True, False):
+            with self.subTest(enable=enable), patch.object(autostart.sys, "platform", "win32"), \
+                    patch.object(autostart.sys, "frozen", True, create=True), \
+                    patch.object(autostart.sys, "executable", executable), \
+                    patch.object(autostart, "startup_shortcut_path", return_value=shortcut), \
+                    patch.object(autostart, "is_enabled", return_value=enable), \
+                    patch.object(autostart.subprocess, "run", return_value=MagicMock(returncode=0)) as run, \
+                    patch.object(autostart, "_wait_for_watcher_exit", return_value=True) as wait, \
+                    patch.object(autostart, "_launch_hidden") as launch:
+                self.assertTrue(autostart.configure_startup(enable, storage))
+            environment = run.call_args.kwargs["env"]
+            self.assertEqual(environment["MAYHEM_STARTUP_EXE"], str(Path(executable).resolve()))
+            self.assertEqual(environment["MAYHEM_STARTUP_LINK"], str(shortcut))
+            self.assertEqual(environment["MAYHEM_STARTUP_MODE"], "enable" if enable else "disable")
+            self.assertNotIn(str(storage), run.call_args.args[0][-1])
+            self.assertNotIn("-ExecutionPolicy", run.call_args.args[0])
+            if enable:
+                launch.assert_called_once_with([executable, "--watch-league"])
+                wait.assert_not_called()
+            else:
+                launch.assert_not_called()
+                wait.assert_called_once_with()
+
+    def test_disabling_reports_failure_when_the_old_watcher_does_not_exit(self):
+        for frozen in (True, False):
+            with self.subTest(frozen=frozen), patch.object(autostart.sys, "platform", "win32"), \
+                    patch.object(autostart.sys, "frozen", frozen, create=True), \
+                    patch.object(autostart, "is_enabled", return_value=False), \
+                    patch.object(autostart.subprocess, "run", return_value=MagicMock(returncode=0)), \
+                    patch.object(autostart, "_wait_for_watcher_exit", return_value=False) as wait, \
+                    patch.object(autostart, "_launch_hidden") as launch:
+                self.assertFalse(autostart.configure_startup(False, Path("fixture")))
+                wait.assert_called_once_with()
+                launch.assert_not_called()
+
+    def test_cleanup_waits_only_when_it_removed_its_own_shortcut(self):
+        for result, success, waits in ((0, True, 1), (autostart._SHORTCUT_SKIPPED, True, 0),
+                                       (3, False, 0)):
+            with self.subTest(result=result), patch.object(autostart.sys, "platform", "win32"), \
+                    patch.object(autostart.sys, "frozen", True, create=True), \
+                    patch.object(autostart, "_configure_frozen_shortcut", return_value=result), \
+                    patch.object(autostart, "_wait_for_watcher_exit", return_value=True) as wait:
+                self.assertEqual(autostart.remove_owned_startup(), success)
+                self.assertEqual(wait.call_count, waits)
+        with patch.object(autostart.sys, "platform", "win32"), \
+                patch.object(autostart.sys, "frozen", True, create=True), \
+                patch.object(autostart, "_configure_frozen_shortcut", return_value=0), \
+                patch.object(autostart, "_wait_for_watcher_exit", return_value=False):
+            self.assertFalse(autostart.remove_owned_startup())
+
+    def test_wait_observes_watcher_exit_then_releases_its_probe_handle(self):
+        native = MagicMock()
+        native.acquire_mutex.side_effect = [None, None, 123]
+        with patch.object(autostart, "_NativeWindows", return_value=native), \
+                patch.object(autostart.time, "monotonic", side_effect=[100, 100, 100.1]), \
+                patch.object(autostart.time, "sleep") as sleep:
+            self.assertTrue(autostart._wait_for_watcher_exit())
+        self.assertEqual(sleep.call_count, 2)
+        native.close_handle.assert_called_once_with(123)
+
+    def test_wait_has_a_bounded_timeout_when_watcher_is_still_running(self):
+        native = MagicMock()
+        native.acquire_mutex.return_value = None
+        with patch.object(autostart, "_NativeWindows", return_value=native), \
+                patch.object(autostart.time, "monotonic", side_effect=[100, 100, 105]), \
+                patch.object(autostart.time, "sleep") as sleep:
+            self.assertFalse(autostart._wait_for_watcher_exit())
+        sleep.assert_called_once_with(0.1)
+        native.close_handle.assert_not_called()
+
+    def test_configuration_failure_does_not_launch_a_watcher(self):
+        with patch.object(autostart.sys, "platform", "win32"), \
+                patch.object(autostart.sys, "frozen", True, create=True), \
+                patch.object(autostart.subprocess, "run", side_effect=OSError("fixture")), \
+                patch.object(autostart, "_launch_hidden") as launch:
+            self.assertFalse(autostart.configure_startup(True, Path("fixture")))
+            self.assertFalse(autostart.remove_owned_startup())
+        launch.assert_not_called()
+
     def test_entrypoint_duplicate_watcher_does_not_start_another_loop(self):
         native = MagicMock()
         native.acquire_mutex.return_value = None
@@ -124,6 +242,37 @@ class StartupAndLaunchTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "win32", "Windows native APIs")
 class NativeWindowsTests(unittest.TestCase):
+    def test_frozen_shortcut_roundtrip_and_uninstall_leave_foreign_owners_untouched(self):
+        # Only a temporary .lnk is touched, never the user's real Startup folder.
+        with tempfile.TemporaryDirectory(prefix="mayhem-startup-") as directory:
+            storage = Path(directory) / "quoted ' $ directory"
+            storage.mkdir()
+            first = storage / "first.exe"
+            second = storage / "second.exe"
+            first.write_bytes(b"test fixture, never executed")
+            second.write_bytes(b"test fixture, never executed")
+            shortcut = storage / autostart.STARTUP_SHORTCUT_NAME
+            with patch.object(autostart.sys, "frozen", True, create=True), \
+                    patch.object(autostart, "startup_shortcut_path", return_value=shortcut), \
+                    patch.object(autostart, "_wait_for_watcher_exit", return_value=True) as wait, \
+                    patch.object(autostart, "_launch_hidden") as launch:
+                with patch.object(autostart.sys, "executable", str(first)):
+                    self.assertTrue(autostart.configure_startup(True, storage))
+                    self.assertTrue(shortcut.is_file())
+                with patch.object(autostart.sys, "executable", str(second)):
+                    self.assertFalse(autostart.configure_startup(False, storage))
+                    self.assertTrue(autostart.remove_owned_startup())
+                    self.assertTrue(shortcut.is_file())
+                    wait.assert_not_called()
+                with patch.object(autostart.sys, "executable", str(first)):
+                    self.assertTrue(autostart.remove_owned_startup())
+                    self.assertFalse(shortcut.exists())
+                    wait.assert_called_once_with()
+                    self.assertTrue(autostart.remove_owned_startup())
+                    wait.assert_called_once_with()
+                    self.assertTrue(autostart.configure_startup(False, storage))
+                launch.assert_called_once_with([str(first), "--watch-league"])
+
     def test_process_snapshot_is_readable_and_returns_only_a_boolean(self):
         native = autostart._NativeWindows()
         self.assertIsInstance(native.league_running(), bool)

@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import queue
 import re
-import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -928,22 +927,12 @@ class Companion:
     def toggle_autostart(self):
         if self._autostart_busy:
             return
-        from .autostart import is_enabled
+        from .autostart import configure_startup, is_enabled
         enable = not is_enabled()
-        script = self.storage / "Configure-Autostart.vbs"
         self._autostart_busy = True
 
         def configure():
-            command = [str(Path(os.environ.get("WINDIR", "C:/Windows")) / "System32" / "cscript.exe"),
-                       "//B", "//NoLogo", str(script), str(self.storage)]
-            if not enable:
-                command.append("disable")
-            try:
-                result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                        timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                success = result.returncode == 0 and is_enabled() == enable
-            except (OSError, subprocess.SubprocessError):
-                success = False
+            success = configure_startup(enable, self.storage)
             self.events.put(("autostart_result", (success, enable)))
 
         threading.Thread(target=configure, name="mayhem-startup-setting", daemon=True).start()
@@ -1055,7 +1044,7 @@ class Companion:
             self._autostart_busy = False
             success, enabled = payload
             self.status.set(("Start with League enabled." if enabled else "Start with League disabled.")
-                            if success else "Could not change automatic launch. Check the installed startup script.")
+                            if success else "Could not change automatic launch. Check the app installation.")
         elif kind in ("tray_status", "hotkeys_failed"):
             self.check_recovery()
         elif kind == "catalog":
@@ -1520,6 +1509,7 @@ class Companion:
 def main():
     parser = argparse.ArgumentParser(description="Local ARAM Mayhem companion")
     parser.add_argument("--browse", action="store_true", help="Start in manual browse mode")
+    parser.add_argument("--show", action="store_true", help="Open the panel while keeping automatic game detection enabled")
     parser.add_argument("--auto-start", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     # A second launcher must not create another overlay with unavailable recovery
@@ -1545,6 +1535,8 @@ def main():
             pass
     root = tk.Tk()
     app = Companion(root)
+    if args.show:
+        app.show_from_tray()
     if args.browse:
         app.browse_mode = True
         app.set_visible(True)

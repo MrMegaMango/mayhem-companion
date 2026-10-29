@@ -1,0 +1,103 @@
+Mayhem Companion - third-party software notices
+==============================================
+
+Mayhem Companion includes software developed by the following projects.
+The complete license texts are supplied under _internal/licenses in the
+application folder. The version inventory is _internal/licenses/versions.json.
+Those license texts apply to their respective components; this notice does
+not replace them or grant rights to third-party game data or artwork.
+
+pystray 0.19.5
+--------------
+Copyright (C) 2016-2022 Moses Palmér.
+pystray and its use in this application are covered by the GNU Lesser General
+Public License version 3 or, at your option, a later version. Both the GNU
+General Public License version 3 (COPYING) and GNU Lesser General Public
+License version 3 (COPYING.LGPL) are included under _internal/licenses.
+pystray is supplied without warranty, including any implied warranty of
+merchantability or fitness for a particular purpose; see those licenses.
+
+Unmodified pystray Python source files are included in _internal/pystray.
+The complete upstream source for this version is available at:
+https://github.com/moses-palmer/pystray/tree/v0.19.5
+https://github.com/moses-palmer/pystray/archive/refs/tags/v0.19.5.tar.gz
+
+To use a modified, interface-compatible pystray version:
+1. Exit the companion using its tray menu. If Start with League is enabled,
+   turn it off while making changes so the watcher cannot relaunch the app.
+2. Keep a backup, then edit or replace the Python source files in
+   _internal/pystray with your interface-compatible version. Retain the
+   package structure, license notices and Windows backend. If present,
+   remove that package's __pycache__ directories after changing its source.
+3. Start MayhemCompanion.exe again. The external pystray source is loaded at
+   runtime; no application rebuild or signing key is needed for this change.
+   You may enable Start with League again if desired.
+
+No application terms restrict your modification of pystray or reverse
+engineering for the purpose of debugging those modifications. Preserve the
+library's notices and follow its license when redistributing modified copies.
+
+Pillow 12.3.0 and its native libraries
+------------------------------------
+Pillow is licensed under MIT-CMU. Its complete wheel license includes the
+notices and license terms for the native libraries incorporated into that
+wheel; the complete file is preserved under _internal/licenses.
+Source: https://github.com/python-pillow/Pillow/tree/12.3.0
+
+This software is based in part on the work of the FreeType Team
+(https://freetype.org). The FreeType License is the selected license for the
+FreeType portions of the Pillow bundle; its text is included with Pillow's
+license notices.
+
+This software is based in part on the work of the Independent JPEG Group.
+
+This product includes software developed by the University of California,
+Berkeley and its contributors.
+
+PyWinRT 3.2.1
+-------------
+The winrt-runtime and winrt-Windows.* Python packages are licensed under MIT.
+Copyright (c) Microsoft Corporation. All rights reserved.
+Copyright (c) 2021-2025 David Lechner <david@pybricks.com>.
+License: _internal/licenses/pywinrt-LICENSE.txt.
+Source: https://github.com/pywinrt/pywinrt/tree/v3.2.1
+
+Other Python packages
+---------------------
+six is licensed under MIT. Its copyright and full license text are included.
+Source: https://github.com/benjaminp/six
+
+typing_extensions is licensed under the Python Software Foundation License
+version 2. Its complete license text is included.
+Source: https://github.com/python/typing_extensions
+
+Python and Tcl/Tk
+-----------------
+The bundled Python runtime is licensed under the Python Software Foundation
+License version 2 and the additional terms reproduced in Python's complete
+LICENSE.txt. That file, including its historical and third-party notices, is
+included under _internal/licenses.
+Source: https://www.python.org/downloads/source/
+
+The Python runtime also uses OpenSSL (Apache License 2.0), libffi (MIT),
+Expat (MIT), and zlib (zlib license). Their additional license files are
+included under _internal/licenses. Sources for the accompanying notices:
+https://github.com/openssl/openssl/tree/openssl-3.5.8
+https://github.com/libffi/libffi/tree/v3.4.4
+https://github.com/libexpat/libexpat/tree/R_2_8_3
+https://github.com/madler/zlib/tree/v1.3.2
+
+Tcl and Tk are distributed under their license.terms files. The notices are
+included under _internal/licenses. When the runtime distribution omits a
+license file, the bundled fallback is taken verbatim from Tcl/Tk 8.6.12:
+https://github.com/tcltk/tcl/blob/core-8-6-12/license.terms
+https://github.com/tcltk/tk/blob/core-8-6-12/license.terms
+The runtime version inventory records the versions actually bundled.
+
+PyInstaller
+-----------
+PyInstaller supplies the executable bootloader and packaging runtime. Its
+license includes an exception permitting distribution of generated bundles
+under terms compatible with the bundled dependencies. The complete license
+and exception text are included under _internal/licenses.
+Source: https://github.com/pyinstaller/pyinstaller

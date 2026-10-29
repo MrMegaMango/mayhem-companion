@@ -107,7 +107,8 @@ class CaptureReader:
             from winrt.windows.storage.streams import DataWriter
         except ImportError as exc:
             raise RuntimeError(
-                "Windows OCR components are missing. Run Setup.ps1 again; "
+                "Windows OCR components are missing. Reinstall Mayhem Companion "
+                "(or rerun Setup.ps1 for a source installation); "
                 "manual augment lookup is still available."
             ) from exc
         try:
