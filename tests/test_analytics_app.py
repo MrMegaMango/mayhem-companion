@@ -1,4 +1,4 @@
-"""Consent timing and usage boundaries use fake views and never send HTTP."""
+"""Quiet startup and usage boundaries use fake views and never send HTTP."""
 import unittest
 from unittest.mock import Mock, patch
 
@@ -15,47 +15,32 @@ class AnalyticsAppTests(unittest.TestCase):
         app = test_app.StateTests().make_view()
         app.analytics = Mock()
         app.analytics.status.return_value = {"configured": True, "consent": "unset"}
-        app._analytics_prompt_shown = False
         app.settings = {"display_preference": "portrait", "position": [-464, 313]}
         app.analytics_dialog = None
         return app
 
-    def test_unconfigured_or_decided_consent_never_prompts(self):
-        for state in ({"configured": False, "consent": "unset"},
-                      {"configured": True, "consent": "disabled"},
-                      {"configured": True, "consent": "enabled"}):
-            app = self.view()
-            app.analytics.status.return_value = state
-            app.last_game_context = {"phase": "Lobby"}
-            app.offer_analytics_consent()
-            app.root.after_idle.assert_not_called()
+    def test_game_phases_never_open_a_usage_prompt(self):
+        for game in ({"status": "waiting", "phase": "Lobby"},
+                     {"status": "waiting", "phase": "Matchmaking"},
+                     {"status": "champ_select", "phase": "ChampSelect", "is_aram": True},
+                     {"status": "live", "phase": "InProgress", "is_aram": True},
+                     {"status": "waiting", "phase": "EndOfGame"}):
+            with self.subTest(game=game):
+                app = self.view()
+                app.show_analytics = Mock()
+                app.handle_game(game)
+                for scheduled in app.root.after_idle.call_args_list:
+                    scheduled.args[0]()
+                app.show_analytics.assert_not_called()
 
-    def test_automatic_prompt_waits_for_known_safe_phase(self):
-        for game in ({}, {"phase": "ChampSelect"}, {"status": "live"},
-                     {"status": "tft"}, {"phase": "Matchmaking"}, {"phase": "ReadyCheck"}):
-            app = self.view()
-            app.last_game_context = game
-            app.offer_analytics_consent()
-            app.root.after_idle.assert_not_called()
-
-    def test_lobby_prompts_once_and_rechecks_before_opening(self):
+    def test_manual_panel_open_does_not_prompt_or_change_sharing(self):
         app = self.view()
-        app.last_game_context = {"phase": "Lobby"}
         app.show_analytics = Mock()
-        app.offer_analytics_consent()
-        app.offer_analytics_consent()
-        app.root.after_idle.assert_called_once()
-        app.last_game_context = {"status": "champ_select"}
-        app.root.after_idle.call_args.args[0]()
+        app.set_manual_visible(True)
+        self.assertFalse(app.hidden)
         app.show_analytics.assert_not_called()
-        self.assertFalse(app._analytics_prompt_shown)
-
-    def test_explicit_manual_open_can_offer_consent_without_league(self):
-        app = self.view()
-        app.show_analytics = Mock()
-        app.offer_analytics_consent(manual=True)
-        app.root.after_idle.call_args.args[0]()
-        app.show_analytics.assert_called_once()
+        app.analytics.set_enabled.assert_not_called()
+        app.root.after_idle.assert_not_called()
 
     def test_first_automatic_arena_visibility_is_not_mislabeled_aram(self):
         app = self.view()

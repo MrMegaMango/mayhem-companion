@@ -1,5 +1,6 @@
 -- Run through your private D1 dashboard or Wrangler. No public analytics API.
--- All counts refer to opted-in installations, not unique human players.
+-- All counts refer to installations with sharing enabled when events were recorded,
+-- not unique human players.
 
 -- Daily active installations, using event occurrence rather than upload date.
 SELECT date(occurred_at) AS day, COUNT(DISTINCT installation_id) AS active_installations

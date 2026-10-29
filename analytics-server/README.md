@@ -1,6 +1,6 @@
 # Optional usage analytics service
 
-Cloudflare Worker + D1 backend for opted-in Mayhem Companion installations. The desktop app sends requests to this API; it never receives database credentials. There is no public data-reading or administration endpoint.
+Cloudflare Worker + D1 backend for Mayhem Companion installations with usage sharing enabled. The desktop app sends requests to this API; it never receives database credentials. There is no public data-reading or administration endpoint.
 
 ## Local verification
 
@@ -25,7 +25,7 @@ The local server listens only on 127.0.0.1. The normal desktop release accepts H
 4. Set the desktop build's analytics endpoint to the deployed HTTPS origin. Do not put account tokens, D1 credentials, or a management secret in the desktop package.
 5. Use fresh synthetic installation credentials to check registration, ingestion, idempotency and deletion before distributing a configured build. The response to deleting that test ID must be 204 and attempts to register the deleted ID must return 410 for 24 hours.
 
-The project service is deployed at `https://mayhem-usage.mayhem-companion-analytics.workers.dev`. The D1 ID in `wrangler.jsonc` identifies the project database and is not a credential. Forks must create their own database, replace this ID and configure their own endpoint; copying the ID does not grant access. The app remains opt-in regardless of endpoint configuration.
+The project service is deployed at `https://mayhem-usage.mayhem-companion-analytics.workers.dev`. The D1 ID in `wrangler.jsonc` identifies the project database and is not a credential. Forks must create their own database, replace this ID and configure their own endpoint; copying the ID does not grant access. Basic usage sharing is enabled by default in configured builds, with no first-run prompt. Users can turn sharing off or delete their collected usage data in the app settings.
 
 ## Protocol
 

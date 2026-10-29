@@ -1,4 +1,4 @@
-"""Opt-in, bounded usage analytics. All networking stays on one daemon worker.
+"""Bounded usage analytics with saved opt-outs and one background network worker.
 
 Installation IDs are pseudonymous, not player IDs. No game payloads, hardware
 IDs, names, logs, screenshots, or free-form properties enter this module.
@@ -132,10 +132,12 @@ def _valid_event(event):
 
 
 class Analytics:
-    """Optional analytics, disabled until an explicit choice.
+    """Usage sharing defaults on for fresh/legacy-unset installations.
 
     Public mutators never perform HTTP. The two consent/data actions perform a
     small atomic local write so a crash cannot restore an obsolete preference.
+    Initial registration and default setup happen on the worker, only after a
+    valid endpoint and durable enabled state. Explicit opt-outs always prevail.
     ``close`` persists the final session but never waits for a network request.
     Underscored arguments are deterministic test seams, not release settings.
     """
@@ -163,6 +165,8 @@ class Analytics:
         self._epoch = 0
         self._dirty = False
         self._write_failed = False
+        self._load_failed = False
+        self._default_enable_pending = False
         self._last_error = ""
         self._attempts = 0
         self._next_due = self._clock()
@@ -182,13 +186,22 @@ class Analytics:
                 self._dirty = True
         if self._dirty:
             self._save_locked()
-        if self._state["deletion_pending"] or (self._state["consent"] == "enabled" and self.endpoint):
+        self._default_enable_pending = self._can_default_enable_locked()
+        if (self._default_enable_pending or self._state["deletion_pending"]
+                or (self._state["consent"] == "enabled" and self.endpoint)):
             self._start_locked()
 
     def _empty_state(self):
         return {"schema": 1, "endpoint": self.endpoint, "consent": "unset",
                 "installation_id": None, "token": None, "registered": False,
                 "deletion_pending": False, "blocked": False, "events": []}
+
+    def _can_default_enable_locked(self):
+        return bool(self.endpoint and self._state["consent"] == "unset"
+                    and not self._load_failed and not self._write_failed
+                    and not self._state["blocked"] and not self._state["deletion_pending"]
+                    and not self._marker_present(self._revoked_path)
+                    and not self._marker_present(self._delete_path))
 
     @staticmethod
     def _marker_present(path):
@@ -212,21 +225,29 @@ class Analytics:
         except OSError:
             return False
 
-    def _remove_stale_opt_in_locked(self):
-        # If both saving the preference and creating its marker fail, removing
-        # the stale consent file is a final fail-closed fallback (for example a
-        # full disk). If the entire location is read-only, no process can make a
-        # durable choice there; clearly report that it is only paused this run.
+    def _persist_revocation_fallback_locked(self):
+        # Never remove the state file: absence is a fresh/default-on install.
+        # An in-place write can still work when creating a marker or replacing
+        # a directory entry fails. A partial/truncated file also fails closed on
+        # the next start. Preserve deletion credentials whenever the write works.
         try:
-            self.path.unlink(missing_ok=True)
+            with open(self.path, "w", encoding="utf-8", newline="\n") as stream:
+                json.dump(self._state, stream, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            self._dirty = self._write_failed = False
+            self._last_error = ""
+            self._next_due = self._clock()
         except OSError:
             self._last_error = "Could not save the choice. Sharing is paused for this run; retry before restarting."
 
     def _load(self):
         try:
-            if not self.path.exists():
+            try:
+                state_size = self.path.stat().st_size
+            except FileNotFoundError:
                 return
-            if self.path.stat().st_size > MAX_STATE:
+            if state_size > MAX_STATE:
                 raise ValueError("Oversized analytics state")
             state = json.loads(self.path.read_text(encoding="utf-8"))
             if (not isinstance(state, dict) or set(state) != STATE_KEYS or state["schema"] != 1
@@ -261,6 +282,7 @@ class Analytics:
             self._prune_locked()
         except (OSError, ValueError, TypeError, KeyError):
             self._state = self._empty_state()
+            self._load_failed = True
             self._last_error = "Stored analytics settings could not be read. Analytics remains off."
 
     def _save_locked(self):
@@ -302,6 +324,7 @@ class Analytics:
         with self._lock:
             if self._closed:
                 return
+            self._default_enable_pending = False
             if enabled and (not self.endpoint or self._state["deletion_pending"] or self._state["blocked"]):
                 self._last_error = ("Analytics is not configured in this build." if not self.endpoint else
                                     "Wait for data deletion to finish before enabling analytics." if self._state["deletion_pending"] else
@@ -323,10 +346,10 @@ class Analytics:
                 self._transport = None
             self._dirty = True
             if not self._save_locked():
-                # No registration or events may proceed with an undurable opt-in.
+                # No registration or events may proceed with undurable settings.
                 self._state["consent"] = "disabled"
                 if not revoked:
-                    self._remove_stale_opt_in_locked()
+                    self._persist_revocation_fallback_locked()
                 self._start_locked()
                 self._wake.set()
                 return
@@ -393,6 +416,7 @@ class Analytics:
         with self._lock:
             if self._closed:
                 return
+            self._default_enable_pending = False
             revoked = self._mark_revoked_locked(delete=True)
             self._epoch += 1
             self._state.update(consent="disabled", events=[])
@@ -406,7 +430,7 @@ class Analytics:
                 self._state["blocked"] = False
             if not self._save_locked():
                 if not revoked:
-                    self._remove_stale_opt_in_locked()
+                    self._persist_revocation_fallback_locked()
                 self._start_locked()
                 self._wake.set()
                 return
@@ -496,6 +520,10 @@ class Analytics:
             with self._lock:
                 if self._closed:
                     return
+                if self._default_enable_pending:
+                    self._default_enable_pending = False
+                    if self._can_default_enable_locked():
+                        self.set_enabled(True)
                 if self._session is not None and self._clock() >= self._heartbeat_due:
                     self._event_locked("session_heartbeat")
                     self._heartbeat_due = self._clock() + self._heartbeat_interval

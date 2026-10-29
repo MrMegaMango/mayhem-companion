@@ -76,9 +76,8 @@ def main():
         ident = token = None
         try:
             client.set_usage(False, "mayhem")
-            assert client.status()["installation_id"] is None and calls == []
-            client.set_enabled(True)
-            eventually(lambda: client.status()["registered"], "Registration did not finish")
+            eventually(lambda: client.status()["registered"], "Default registration did not finish")
+            assert client.status()["consent"] == "enabled"
             ident = client.status()["installation_id"]
             token = json.loads(client.path.read_text())["token"]
             client.set_usage(True, "mayhem")
@@ -108,7 +107,7 @@ def main():
             id_hash = hashlib.sha256(ident.encode()).hexdigest()
             assert db.execute("SELECT COUNT(*) FROM deletion_tombstones WHERE installation_hash = ?", (id_hash,)).fetchone()[0] == 1
             assert transport("POST", "/v1/installations", {"installation_id": ident, "token": token}, None) == 410
-            print("Real client -> Worker -> D1 passed: opt-in, visible session, mode change, 2-minute duration, batched upload, opt-out, deletion, and replay suppression. D1: 0 test events, 0 test installations; temporary hash-only deletion marker remains.")
+            print("Real client -> Worker -> D1 passed: default sharing and registration, visible session, mode change, 2-minute duration, batched upload, opt-out, deletion, and replay suppression. D1: 0 test events, 0 test installations; temporary hash-only deletion marker remains.")
         finally:
             client.close()
             if ident and token:

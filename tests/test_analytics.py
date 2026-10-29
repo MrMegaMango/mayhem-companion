@@ -63,8 +63,8 @@ class AnalyticsTests(unittest.TestCase):
         eventually(lambda: len(self.calls) >= 1)
         eventually(lambda: client.status()["registered"] and not client.status()["blocked"])
 
-    def test_unset_and_disabled_collect_no_identity_or_events_and_make_no_requests(self):
-        client = self.make()
+    def test_unconfigured_and_saved_opt_out_collect_nothing(self):
+        client = self.make(endpoint="")
         client.set_usage(True, "mayhem")
         self.assertEqual(client.status()["consent"], "unset")
         self.assertIsNone(client.status()["installation_id"])
@@ -73,6 +73,11 @@ class AnalyticsTests(unittest.TestCase):
         client.set_enabled(False)
         self.assertIsNone(client.status()["installation_id"])
         self.assertEqual(client.status()["queued"], 0)
+        client.close()
+        again = self.make()
+        self.assertEqual(again.status()["consent"], "disabled")
+        self.assertIsNone(again.status()["installation_id"])
+        self.assertIsNone(again._thread)
         self.transport.assert_not_called()
 
     def test_missing_or_invalid_endpoint_cannot_enable(self):
@@ -86,10 +91,13 @@ class AnalyticsTests(unittest.TestCase):
                 self.assertIsNone(client.status()["installation_id"])
         self.transport.assert_not_called()
 
-    def test_explicit_enable_creates_persistent_random_identity_and_worker_only_http(self):
+    def test_fresh_install_defaults_on_with_persistent_identity_and_worker_only_http(self):
         client = self.make()
-        self.register(client)
+        eventually(lambda: client.status()["registered"])
+        self.assertEqual(client.status()["consent"], "enabled")
+        self.assertEqual(client.status()["queued"], 0)
         state = json.loads(client.path.read_text())
+        self.assertEqual(state["consent"], "enabled")
         self.assertEqual(len(state["token"]), 43)
         self.assertNotIn("token", client.status())
         self.assertEqual(self.calls[0][4], "mayhem-analytics")
@@ -98,6 +106,28 @@ class AnalyticsTests(unittest.TestCase):
         again = self.make()
         self.assertEqual(again.status()["installation_id"], ident)
         self.assertEqual(json.loads(again.path.read_text())["token"], state["token"])
+
+    def test_legacy_unset_defaults_on_when_an_endpoint_becomes_available(self):
+        legacy = self.make(endpoint="")
+        legacy.path.write_text(json.dumps(legacy._empty_state()), encoding="utf-8")
+        legacy.close()
+        client = self.make()
+        eventually(lambda: client.status()["registered"])
+        self.assertEqual(client.status()["consent"], "enabled")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_privacy_markers_without_state_prevent_default_enable(self):
+        for marker in ("analytics.revoked", "analytics.delete-pending"):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                storage = Path(directory)
+                (storage / marker).write_text("1\n")
+                client = Analytics(storage, ENDPOINT, "0.6.0", _transport=self.transport)
+                self.instances.append(client)
+                self.assertEqual(client.status()["consent"], "disabled")
+                self.assertIsNone(client.status()["installation_id"])
+                self.assertIsNone(client._thread)
+                client.close()
+        self.transport.assert_not_called()
 
     def test_visible_time_only_duration_uses_monotonic_and_unknown_modes_are_sanitized(self):
         client = self.make()
@@ -132,6 +162,12 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(saved["consent"], "disabled")
         self.assertEqual(saved["events"], [])
         self.assertEqual(saved["installation_id"], ident)
+        client.close()
+        again = self.make()
+        self.assertEqual(again.status()["consent"], "disabled")
+        self.assertEqual(again.status()["installation_id"], ident)
+        self.assertIsNone(again._thread)
+        self.assertEqual(len(self.calls), 1)
 
     def test_failed_opt_out_replacement_cannot_restore_old_consent_on_restart(self):
         client = self.make()
@@ -148,6 +184,43 @@ class AnalyticsTests(unittest.TestCase):
         again.set_enabled(True)
         self.assertEqual(again.status()["consent"], "enabled")
         self.assertFalse((self.storage / "analytics.revoked").exists())
+
+    def test_failed_marker_and_replacement_use_durable_in_place_opt_out(self):
+        client = self.make()
+        self.register(client)
+        with patch.object(client, "_mark_revoked_locked", return_value=False), \
+                patch("mayhem.analytics.os.replace", side_effect=OSError):
+            client.set_enabled(False)
+            self.assertFalse(client.status()["blocked"])
+            self.assertEqual(json.loads(client.path.read_text())["consent"], "disabled")
+            client.close()
+        before = len(self.calls)
+        again = self.make()
+        self.assertEqual(again.status()["consent"], "disabled")
+        self.assertIsNone(again._thread)
+        self.assertEqual(len(self.calls), before)
+
+    def test_fully_unwritable_opt_out_reports_that_only_this_run_is_paused(self):
+        client = self.make()
+        self.register(client)
+        actual_open = open
+
+        def refuse_state_write(path, mode="r", *args, **kwargs):
+            if Path(path) == client.path and "w" in mode:
+                raise PermissionError("private path")
+            return actual_open(path, mode, *args, **kwargs)
+
+        with patch.object(client, "_mark_revoked_locked", return_value=False), \
+                patch("mayhem.analytics.os.replace", side_effect=OSError), \
+                patch("builtins.open", side_effect=refuse_state_write):
+            client.set_enabled(False)
+            self.assertEqual(client.status()["consent"], "disabled")
+            self.assertTrue(client.status()["blocked"])
+            self.assertIn("this run", client.status()["last_error"])
+            self.assertNotIn("private path", client.status()["last_error"])
+            self.assertTrue(client.path.exists())
+        client.set_enabled(False)
+        self.assertEqual(json.loads(client.path.read_text())["consent"], "disabled")
 
     def test_delete_request_survives_failed_state_replacement_and_restart(self):
         client = self.make()
@@ -195,10 +268,10 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(heartbeat["occurred_at"], "2026-10-30T00:10:00Z")
         self.assertEqual(heartbeat["duration_minutes"], 15)
 
-    def test_persistence_failure_never_sends_and_can_recover_without_an_opt_in(self):
-        client = self.make()
+    def test_default_setup_failure_never_sends_and_recovers_with_sharing_still_off(self):
         with patch("mayhem.analytics.os.replace", side_effect=OSError("private path")):
-            client.set_enabled(True)
+            client = self.make()
+            eventually(lambda: client.status()["blocked"])
             self.assertEqual(client.status()["consent"], "disabled")
             self.assertTrue(client.status()["blocked"])
             self.assertNotIn("private path", client.status()["last_error"])
@@ -304,6 +377,29 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(again.status()["consent"], "unset")
         self.assertIsNone(again.status()["installation_id"])
         self.assertIsNone(again._thread)
+
+    def test_unreadable_state_is_not_treated_as_a_fresh_install(self):
+        self.storage.joinpath("analytics.json").write_text("{}")
+        with patch("mayhem.analytics.Path.read_text", side_effect=PermissionError("private path")):
+            client = self.make()
+        self.assertEqual(client.status()["consent"], "unset")
+        self.assertIsNone(client.status()["installation_id"])
+        self.assertIsNone(client._thread)
+        self.assertIn("remains off", client.status()["last_error"])
+        self.transport.assert_not_called()
+
+    def test_saved_blocked_state_does_not_default_enable(self):
+        seed = self.make(endpoint="")
+        state = seed._empty_state()
+        state["blocked"] = True
+        seed.path.write_text(json.dumps(state))
+        seed.close()
+        client = self.make()
+        self.assertEqual(client.status()["consent"], "disabled")
+        self.assertTrue(client.status()["blocked"])
+        self.assertIsNone(client.status()["installation_id"])
+        self.assertIsNone(client._thread)
+        self.transport.assert_not_called()
 
     def test_destination_change_pauses_and_only_deletes_at_original_destination(self):
         client = self.make()

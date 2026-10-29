@@ -1,10 +1,12 @@
 # Usage data and privacy
 
-Usage sharing is optional and off by default. Every companion feature works without it. Use **Privacy & usage** in the tray or **Privacy** in the **?** window to change this choice. The one-time choice is deferred while queued or in a game. Closing it keeps sharing off.
+Basic usage sharing is enabled by default, with no startup prompt. Every companion feature also works with sharing off. Use **Privacy & usage** in the tray or **Privacy** in the **?** window to turn it off or delete earlier reports. Closing that settings window leaves the current setting unchanged.
+
+New installations and older installations without a saved choice start sharing automatically when the service is configured. Previously saved off choices remain off across updates. Pending deletion, unreadable settings and an invalid service configuration do not silently enable sharing.
 
 ## What is sent
 
-Enabling sharing creates a random installation ID and a separate random secret. No identifier is created or request sent before consent. This is an installation count, not a verified count of people; reinstalling/resetting or using multiple computers can count more than once.
+Sharing creates a random installation ID and a separate random secret. A new installation registers automatically in the background; usage events begin only when the companion panel is visible. This is an installation count, not a verified count of people; reinstalling/resetting or using multiple computers can count more than once.
 
 Reports contain only:
 
@@ -25,7 +27,7 @@ Data is stored in Cloudflare D1. Raw events and inactive installation records ex
 
 Cloudflare processes IP addresses and other network metadata to serve requests. The app's database does not store IP addresses or user-agent headers, Worker request logging is disabled, and service code does not log payloads or credentials. An IP digest that changes daily is used transiently for short-window rate limiting. Stats providers still receive their normal data requests independently of usage sharing.
 
-Local consent, queue and installation credentials live in `%USERPROFILE%\MayhemCompanion\analytics.json`, with small revocation/deletion marker files when needed. These files are not distributed or committed. Do not share them. Uninstalling cannot finish a pending server deletion; use the deletion control first if desired.
+The local sharing preference, queue and installation credentials live in `%USERPROFILE%\MayhemCompanion\analytics.json`, with small revocation/deletion marker files when needed. These files are not distributed or committed. Do not share them. Uninstalling cannot finish a pending server deletion; use the deletion control first if desired.
 
 ## Owner reporting and operation
 

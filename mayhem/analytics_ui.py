@@ -1,4 +1,4 @@
-"""Explicit, optional usage sharing controls; all transport lives in Analytics."""
+"""Usage sharing settings; all transport lives in Analytics."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -10,20 +10,19 @@ TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
 
 
 class AnalyticsDialog(tk.Toplevel):
-    """A nonmodal consent/settings view that never performs network requests.
+    """A manually opened settings view that never performs network requests.
 
-    Closing an unanswered first-run prompt keeps sharing off. Opening or closing
-    the settings view never enables sharing. The parent owns singleton handling.
+    Opening or closing this view never changes the sharing preference. The
+    parent owns singleton handling; startup defaults belong to Analytics.
     """
 
     def __init__(self, parent, analytics, *, position=None, work_area=None,
-                 on_change: Callable[[], None] | None = None, first_run=False,
+                 on_change: Callable[[], None] | None = None,
                  endpoint_label="Cloudflare"):
         super().__init__(parent)
         self.withdraw()
         self.analytics = analytics
         self._on_change = on_change
-        self._first_run = bool(first_run)
         self._endpoint_label = str(endpoint_label)[:180]
         self._work_area = work_area
         self._poll_job = None
@@ -47,8 +46,8 @@ class AnalyticsDialog(tk.Toplevel):
         self.badge = self._label(heading, "OFF", size=9, color=MUTED, bold=True)
         self.badge.pack(side="right")
         self._label(
-            self.body, "Help improve the companion with basic usage reports.\n"
-            "Optional; every feature works with sharing off.", color=MUTED,
+            self.body, "Basic usage sharing is enabled by default.\n"
+            "You can turn it off here.", color=MUTED,
         ).pack(fill="x", pady=(0, 14))
         self._label(
             self.body, "Random installation ID, app version, mode, and session activity.",
@@ -56,13 +55,13 @@ class AnalyticsDialog(tk.Toplevel):
         self.detail_button = self._button(self.body, "What is shared?", self._toggle_details)
         self.detail_button.pack(anchor="w", pady=(0, 12))
 
-        # Consent and deletion controls remain above the expandable explanation.
+        # Sharing and deletion controls stay above the expandable explanation.
         actions = tk.Frame(self.body, bg=BG)
         actions.pack(fill="x")
         actions.columnconfigure(0, weight=1, uniform="choice")
         actions.columnconfigure(1, weight=1, uniform="choice")
-        self.off_button = self._button(actions, "Keep off", self._keep_off_or_close)
-        self.off_button.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self.close_button = self._button(actions, "Close", self._close)
+        self.close_button.grid(row=0, column=0, sticky="ew", padx=(0, 5))
         self.share_button = self._button(actions, "Enable usage sharing", self._toggle_sharing)
         self.share_button.grid(row=0, column=1, sticky="ew", padx=(5, 0))
         self.delete_button = self._button(self.body, "Delete data & reset ID", self._delete)
@@ -85,7 +84,7 @@ class AnalyticsDialog(tk.Toplevel):
         self._fit(position)
         self.deiconify()
         self.lift()
-        # Do not focus an affirmative action or bind Enter to consent.
+        # Merely opening settings must not toggle sharing.
         self.focus_set()
         self._schedule_poll()
 
@@ -122,7 +121,6 @@ class AnalyticsDialog(tk.Toplevel):
                              fg=AMBER if blocked or pending else ACCENT if enabled else MUTED)
         self.share_button.configure(text="Turn off" if enabled else "Enable usage sharing",
                                     state="normal" if not pending and (enabled or (configured and not blocked)) else "disabled")
-        self.off_button.configure(text="Keep off" if self._first_run and not enabled else "Close")
         self.delete_button.configure(state="normal" if ident and not pending else "disabled")
 
         if self._action_error:
@@ -147,7 +145,7 @@ class AnalyticsDialog(tk.Toplevel):
         elif ident:
             message = "Sharing is off. Delete data to remove earlier reports and reset this installation’s ID."
         else:
-            message = "Sharing is off. An ID is created only when you enable it."
+            message = "Sharing is off. Use Enable usage sharing to turn it on."
         self.status.set(message)
         self.status_label.configure(fg=AMBER if blocked or pending or self._action_error or state.get("last_error") else MUTED)
         if self._details_visible and state != self._last_status:
@@ -158,6 +156,8 @@ class AnalyticsDialog(tk.Toplevel):
     def _render_details(self, state):
         ident = state.get("installation_id") or "Not created"
         text = (
+            "Sharing starts enabled on new installations and existing installations without a saved choice. "
+            "A saved off preference stays off. Every feature works with sharing off.\n\n"
             "Shared fields\n"
             "• Random installation ID and session/event IDs\n"
             "• App version\n"
@@ -201,13 +201,9 @@ class AnalyticsDialog(tk.Toplevel):
             self._action_error = "Could not save the sharing setting. Please try again."
         else:
             self._action_error = ""
-            self._first_run = False
             self._changed()
         self._refresh()
         self._fit()
-
-    def _keep_off_or_close(self):
-        self._close()
 
     def _delete(self):
         state = self._state()
@@ -219,7 +215,6 @@ class AnalyticsDialog(tk.Toplevel):
             self._action_error = "Could not request deletion. Please try again."
         else:
             self._action_error = ""
-            self._first_run = False
             self._changed()
         self._refresh()
         self._fit()
@@ -227,14 +222,6 @@ class AnalyticsDialog(tk.Toplevel):
     def _close(self):
         if self._closed:
             return
-        if self._first_run and self._state().get("consent") != "enabled":
-            try:
-                self.analytics.set_enabled(False)
-            except Exception:
-                self._action_error = "Sharing remains off; the preference could not be saved."
-                self._refresh()
-                return
-            self._changed()
         self.destroy()
 
     def _toggle_details(self):

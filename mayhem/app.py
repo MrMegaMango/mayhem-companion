@@ -81,7 +81,6 @@ class Companion:
         self._autostart_busy = False
         self.feedback_dialog = None
         self.analytics_dialog = None
-        self._analytics_prompt_shown = False
         self.stop = threading.Event()
         self.catalog = None
         self.champion = self.live_champion = None
@@ -901,8 +900,6 @@ class Companion:
             return
         self.visibility_override = visible
         self.set_visible(visible)
-        if visible:
-            self.offer_analytics_consent(manual=True)
 
     def show_from_tray(self):
         # The tray must also recover a click-through panel without a shortcut.
@@ -1214,7 +1211,6 @@ class Companion:
 
     def handle_game(self, game):
         self.last_game_context = game
-        self.offer_analytics_consent()
         self.update_visibility(game)
         if self.mode_choice.get() == "Auto":
             if game.get("is_tft") is True:
@@ -1354,34 +1350,6 @@ class Companion:
         if analytics is not None:
             analytics.set_usage(not self.hidden if visible is None else bool(visible), self.analytics_mode())
 
-    def analytics_game_active(self):
-        game = self.last_game_context
-        return (game.get("status") in ("champ_select", "live", "tft", "arena") or
-                game.get("phase") in ("ChampSelect", "GameStart", "InProgress", "Reconnect", "ReadyCheck", "Matchmaking"))
-
-    def offer_analytics_consent(self, manual=False):
-        analytics = getattr(self, "analytics", None)
-        if analytics is None or self._analytics_prompt_shown or self.analytics_game_active():
-            return
-        state = analytics.status()
-        if not state.get("configured") or state.get("consent") != "unset":
-            return
-        # Background startup waits for a known lobby/end state. Unknown polls
-        # must not bring a consent window over a game still being detected.
-        if not manual and self.last_game_context.get("phase") not in ("None", "Lobby", "EndOfGame", "WaitingForStats"):
-            return
-        self._analytics_prompt_shown = True
-
-        def prompt():
-            if self._closed:
-                return
-            if self.analytics_game_active():
-                self._analytics_prompt_shown = False
-            else:
-                self.show_analytics()
-
-        self.root.after_idle(prompt)
-
     def show_analytics(self):
         dialog = getattr(self, "analytics_dialog", None)
         if dialog is not None and dialog.winfo_exists():
@@ -1389,13 +1357,11 @@ class Companion:
             dialog.lift()
             dialog.focus_force()
             return
-        self._analytics_prompt_shown = True
-        state = self.analytics.status()
         x, y, _ = self.panel_placement(700, self.settings.get("position"))
         endpoint = self.analytics.endpoint
         self.analytics_dialog = AnalyticsDialog(
             self.root, self.analytics, position=(x, y), work_area=self._last_display["work_area"],
-            on_change=self.sync_analytics, first_run=state.get("consent") == "unset",
+            on_change=self.sync_analytics,
             endpoint_label=urlsplit(endpoint).hostname or "Not configured")
 
     def show_feedback(self):

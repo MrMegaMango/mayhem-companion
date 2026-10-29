@@ -42,9 +42,9 @@ You can also use the [GitHub issue forms](https://github.com/MrMegaMango/mayhem-
 
 ## Optional usage sharing
 
-Usage sharing is **off by default**. Open **Privacy & usage** from the tray or **Privacy** in the **?** window to enable it, turn it off, or delete earlier reports and reset your installation ID. A one-time choice appears outside active games when the service is configured; closing it keeps sharing off. Every feature works with sharing off.
+Basic usage sharing is **on by default**, with no startup prompt. Open **Privacy & usage** from the tray or **Privacy** in the **?** window to turn it off or delete earlier reports and reset your installation ID. Existing off choices stay off after updates; every feature works with sharing off.
 
-Opting in creates a random installation ID and sends app version, game mode, minute-rounded session times and visible-panel duration to the project's Cloudflare Worker and D1 database. No Riot ID, champion, match history, screenshot, keystroke or raw log is included. Requests run in a background thread and are batched. See [usage data and privacy](ANALYTICS.md) for the exact fields, retention, deletion and owner reporting.
+When enabled, sharing creates a random installation ID and sends app version, game mode, minute-rounded session times and visible-panel duration to the project's Cloudflare Worker and D1 database. No Riot ID, champion, match history, screenshot, keystroke or raw log is included. Requests run in a background thread and are batched. See [usage data and privacy](ANALYTICS.md) for the exact fields, retention, deletion and owner reporting.
 
 ## Data
 
