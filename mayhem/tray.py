@@ -63,6 +63,7 @@ def _native_icon_factory(on_action):
         pystray.MenuItem("Start with League", lambda _icon, _item: on_action("toggle_autostart"),
                          checked=_autostart_checked),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Privacy & usage", lambda _icon, _item: on_action("privacy")),
         pystray.MenuItem("Send feedback", lambda _icon, _item: on_action("feedback")),
         pystray.MenuItem("Exit", lambda _icon, _item: on_action("exit")),
     )
@@ -75,7 +76,7 @@ class TrayIcon:
     """Nonblocking tray lifecycle, independent of Tk and the game's UI.
 
     Emits ('tray_status', bool) when readiness changes or startup fails, and
-    ('tray_action', 'show'|'hide'|'toggle_autostart'|'feedback'|'exit') for menu/default actions.
+    ('tray_action', 'show'|'hide'|'toggle_autostart'|'privacy'|'feedback'|'exit') for menu/default actions.
     The app must drain these events on its own UI thread. A closed instance is
     not restarted; construct a new one if a later restart is needed.
     """
@@ -105,7 +106,7 @@ class TrayIcon:
 
     def _action(self, action):
         with self._lock:
-            if not self._closed and action in ("show", "hide", "toggle_autostart", "feedback", "exit"):
+            if not self._closed and action in ("show", "hide", "toggle_autostart", "privacy", "feedback", "exit"):
                 self.output.put(("tray_action", action))
 
     @staticmethod

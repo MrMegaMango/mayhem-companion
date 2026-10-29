@@ -28,6 +28,7 @@ $appPath = Join-Path $InstallPath 'app'
 New-Item -ItemType Directory -Force -Path $appPath | Out-Null
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'mayhem') -Destination $appPath -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.md') -Destination $InstallPath -Force
+Copy-Item -LiteralPath (Join-Path $sourceRoot 'ANALYTICS.md') -Destination $InstallPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'Launch.vbs') -Destination $InstallPath -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'Configure-Autostart.vbs') -Destination $InstallPath -Force
 $desktop = [Environment]::GetFolderPath('Desktop')

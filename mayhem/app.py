@@ -31,6 +31,9 @@ from . import __version__
 from .feedback import (FEEDBACK_EMAIL, build_report, email_draft, feedback_mode,
                        open_email_draft, technical_details)
 from .feedback_ui import FeedbackDialog
+from .analytics import Analytics
+from .analytics_ui import AnalyticsDialog
+from urllib.parse import urlsplit
 
 BG, PANEL, FIELD = "#10151e", "#192231", "#222e40"
 TEXT, MUTED, ACCENT, AMBER = "#edf4ff", "#9aacc4", "#7ce1bd", "#efc47c"
@@ -40,6 +43,17 @@ POLICY_URL = "https://developer.riotgames.com/docs/lol#game-policy"
 def app_dir():
     # Outside AppData to avoid packaged-host filesystem virtualization.
     return Path.home() / "MayhemCompanion"
+
+
+def load_analytics_endpoint():
+    try:
+        path = Path(__file__).with_name("analytics_config.json")
+        if path.stat().st_size > 4096:
+            return ""
+        config = json.loads(path.read_text(encoding="utf-8"))
+        return config.get("endpoint", "") if isinstance(config, dict) and isinstance(config.get("endpoint", ""), str) else ""
+    except (OSError, ValueError):
+        return ""
 
 
 def compact_count(count):
@@ -66,6 +80,8 @@ class Companion:
         self._closed = self.recovery_visible = False
         self._autostart_busy = False
         self.feedback_dialog = None
+        self.analytics_dialog = None
+        self._analytics_prompt_shown = False
         self.stop = threading.Event()
         self.catalog = None
         self.champion = self.live_champion = None
@@ -114,6 +130,7 @@ class Companion:
         self.arena_champion = None
         self.arena_pending = False
         self.build()
+        self.analytics = Analytics(self.storage, load_analytics_endpoint(), __version__)
         self.icons = IconLoader(self.events, self.stop, self.storage / "cache" / "icons")
         self.icons.start()
         self.hotkeys = Hotkeys(root, {101: (ord("M"), self.toggle_visible),
@@ -306,6 +323,7 @@ class Companion:
         if self.display_mode == "arena":
             self.arena_panel.handle_game({})
         self.display_mode = mode
+        self.sync_analytics()
         self.brand.configure(text={"tft": "TFT", "arena": "ARENA"}.get(mode, "MAYHEM"))
         self.arena_panel.pack_forget()
         if mode == "arena":
@@ -883,6 +901,8 @@ class Companion:
             return
         self.visibility_override = visible
         self.set_visible(visible)
+        if visible:
+            self.offer_analytics_consent(manual=True)
 
     def show_from_tray(self):
         # The tray must also recover a click-through panel without a shortcut.
@@ -932,6 +952,7 @@ class Companion:
         threading.Thread(target=configure, name="mayhem-startup-setting", daemon=True).start()
 
     def set_visible(self, visible):
+        self.sync_analytics(visible=visible)
         if visible == (not self.hidden):
             if visible and self._placement_job is None:
                 self.schedule_placement_check()
@@ -1031,6 +1052,8 @@ class Companion:
                 self.toggle_autostart()
             elif payload == "feedback":
                 self.show_feedback()
+            elif payload == "privacy":
+                self.show_analytics()
         elif kind == "autostart_result":
             self._autostart_busy = False
             success, enabled = payload
@@ -1191,6 +1214,7 @@ class Companion:
 
     def handle_game(self, game):
         self.last_game_context = game
+        self.offer_analytics_consent()
         self.update_visibility(game)
         if self.mode_choice.get() == "Auto":
             if game.get("is_tft") is True:
@@ -1310,6 +1334,69 @@ class Companion:
             if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
                 url = "https://aramkit.com/en-US/champions/" + slug
         webbrowser.open(url)
+
+    def analytics_mode(self):
+        mode = self.display_mode
+        game = self.last_game_context
+        if self.mode_choice.get() == "Auto":
+            if game.get("is_tft") is True:
+                mode = "tft"
+            elif game.get("is_arena") is True:
+                mode = "arena"
+            elif game.get("is_aram") is True or game.get("is_tft") is False:
+                mode = "aram"
+        if mode == "aram" and (game.get("queue_id") == 2400 or game.get("game_mode") == "KIWI"):
+            return "mayhem"
+        return mode if mode in ("aram", "arena", "tft") else "unknown"
+
+    def sync_analytics(self, visible=None):
+        analytics = getattr(self, "analytics", None)
+        if analytics is not None:
+            analytics.set_usage(not self.hidden if visible is None else bool(visible), self.analytics_mode())
+
+    def analytics_game_active(self):
+        game = self.last_game_context
+        return (game.get("status") in ("champ_select", "live", "tft", "arena") or
+                game.get("phase") in ("ChampSelect", "GameStart", "InProgress", "Reconnect", "ReadyCheck", "Matchmaking"))
+
+    def offer_analytics_consent(self, manual=False):
+        analytics = getattr(self, "analytics", None)
+        if analytics is None or self._analytics_prompt_shown or self.analytics_game_active():
+            return
+        state = analytics.status()
+        if not state.get("configured") or state.get("consent") != "unset":
+            return
+        # Background startup waits for a known lobby/end state. Unknown polls
+        # must not bring a consent window over a game still being detected.
+        if not manual and self.last_game_context.get("phase") not in ("None", "Lobby", "EndOfGame", "WaitingForStats"):
+            return
+        self._analytics_prompt_shown = True
+
+        def prompt():
+            if self._closed:
+                return
+            if self.analytics_game_active():
+                self._analytics_prompt_shown = False
+            else:
+                self.show_analytics()
+
+        self.root.after_idle(prompt)
+
+    def show_analytics(self):
+        dialog = getattr(self, "analytics_dialog", None)
+        if dialog is not None and dialog.winfo_exists():
+            dialog.deiconify()
+            dialog.lift()
+            dialog.focus_force()
+            return
+        self._analytics_prompt_shown = True
+        state = self.analytics.status()
+        x, y, _ = self.panel_placement(700, self.settings.get("position"))
+        endpoint = self.analytics.endpoint
+        self.analytics_dialog = AnalyticsDialog(
+            self.root, self.analytics, position=(x, y), work_area=self._last_display["work_area"],
+            on_change=self.sync_analytics, first_run=state.get("consent") == "unset",
+            endpoint_label=urlsplit(endpoint).hostname or "Not configured")
 
     def show_feedback(self):
         dialog = getattr(self, "feedback_dialog", None)
@@ -1433,6 +1520,11 @@ class Companion:
                 about.configure(text="Hide details")
             fit()
 
+        def privacy():
+            dialog.destroy()
+            self.show_analytics()
+
+        self.button(links, "Privacy", privacy).pack(side="left", padx=8)
         about = self.button(links, "About & policies", toggle_details)
         about.pack(side="right")
         fit()
@@ -1445,6 +1537,8 @@ class Companion:
         self._closed = True
         self.cancel_placement_check()
         self.stop.set()
+        if hasattr(self, "analytics"):
+            self.analytics.close()
         if hasattr(self, "tray"):
             self.tray.close()
         if hasattr(self, "hotkeys"):

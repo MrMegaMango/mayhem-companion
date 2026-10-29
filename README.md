@@ -12,7 +12,7 @@ The companion starts hidden and waits in the background. It appears automaticall
 
 The header's **Auto / ARAM / Arena / TFT** selector follows the detected game by default. Choose a mode to browse its reference manually. All modes use the same tray, League startup watcher and preferred portrait monitor.
 
-The **M icon in the Windows notification area** remains available while the panel is hidden. Click it to show the panel, or right-click for **Show companion**, **Hide companion**, **Send feedback**, and **Exit**. Showing from the tray also unlocks click-through controls. Windows may place the icon in its hidden-icons menu. Exit removes the icon and stops the background companion.
+The **M icon in the Windows notification area** remains available while the panel is hidden. Click it to show the panel, or right-click for **Show companion**, **Hide companion**, **Send feedback**, **Privacy & usage**, and **Exit**. Showing from the tray also unlocks click-through controls. Windows may place the icon in its hidden-icons menu. Exit removes the icon and stops the background companion.
 
 Turn on **Start with League** in the tray menu to launch automatically when the League client opens. This installs one shortcut in your own Windows Startup folder: a small watcher starts at sign-in, checks League process names every two seconds, and launches the companion once per League session. Exit stays effective for that session; closing and reopening League starts it again. The watcher also counts an active game so a client closing during a match does not trigger another launch. Turn the tray setting off to remove the startup shortcut and stop the watcher. Setup also accepts `-StartWithLeague`. Outside the app, run `cscript //NoLogo Configure-Autostart.vbs "%USERPROFILE%\MayhemCompanion" disable` from the installed folder to disable it.
 
@@ -39,6 +39,12 @@ Choose **Send feedback** from the tray menu or at the top of the compact **?** h
 **Open email draft** prepares a message to **amangousa@gmail.com** in your email app. Review it and press Send there; opening a draft does not submit feedback. You can attach a screenshot yourself in the email app. If no email app is configured, choose **Copy report** and paste it into your preferred email service. No GitHub account is required for email feedback.
 
 You can also use the [GitHub issue forms](https://github.com/MrMegaMango/mayhem-companion/issues/new/choose) for bug reports, suggestions, and incorrect statistics. GitHub submissions require signing in and are public; do not include credentials or personal information in them.
+
+## Optional usage sharing
+
+Usage sharing is **off by default**. Open **Privacy & usage** from the tray or **Privacy** in the **?** window to enable it, turn it off, or delete earlier reports and reset your installation ID. A one-time choice appears outside active games when the service is configured; closing it keeps sharing off. Every feature works with sharing off.
+
+Opting in creates a random installation ID and sends app version, game mode, minute-rounded session times and visible-panel duration to the project's Cloudflare Worker and D1 database. No Riot ID, champion, match history, screenshot, keystroke or raw log is included. Requests run in a background thread and are batched. See [usage data and privacy](ANALYTICS.md) for the exact fields, retention, deletion and owner reporting.
 
 ## Data
 
@@ -68,7 +74,7 @@ Champion select is read from the local League Client API, using the current clie
 
 In-game champion and inventory detection use Riot's documented read-only Live Client Data API on Windows `127.0.0.1:2999`. Item IDs come from your matched active-player record in the existing player-list request; inventory is matched locally and is not uploaded. TLS relaxation is scoped to these loopback services, and redirects and proxies are refused. Public stats use normal HTTPS verification. The app does not read game memory, inject code, modify item sets, install drivers, automate gameplay, or request your account password.
 
-Screen capture runs only when the League game executable is the visible foreground window. Screenshots remain in memory and OCR runs locally. No screenshots, player names, Riot IDs or game histories are uploaded automatically. Feedback includes only the report you choose to share; screenshots can be attached manually in your email app or on GitHub. HTTP requests to ARAMKit identify the public champion ID being looked up, as a normal page lookup would. Cache, window position and error logs are under `%USERPROFILE%\MayhemCompanion`.
+Screen capture runs only when the League game executable is the visible foreground window. Screenshots remain in memory and OCR runs locally. No screenshots, player names, Riot IDs or game histories are uploaded automatically. Feedback includes only the report you choose to share; screenshots can be attached manually in your email app or on GitHub. HTTP requests to ARAMKit identify the public champion ID being looked up, as a normal page lookup would. Optional usage reports are described above; Cloudflare receives network metadata to handle those requests, but the analytics database does not store IP addresses. Cache, window position and error logs are under `%USERPROFILE%\MayhemCompanion`.
 
 Capture copies the requested rectangle directly through Windows GDI instead of reading both monitors and cropping afterward. The usual title band is 8.75% of the game frame (9.5% for Arena's slightly wider title row); the broader layout fallback is captured only if needed. OCR leaves a 0.35-second pause after an active scan completes, 0.8 seconds between idle/paused scans, and 10 seconds after an OCR error. Disabling Auto scan stops capture/OCR while retaining manual lookups and local game polling.
 

@@ -7,3 +7,11 @@ settings.json
 build/
 dist/
 .pytest_cache/
+
+# Private usage state and local Cloudflare tooling
+analytics.json
+analytics.revoked
+analytics.delete-pending
+node_modules/
+.wrangler/
+.dev.vars*
