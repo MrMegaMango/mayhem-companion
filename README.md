@@ -32,7 +32,7 @@ Turn on **Start with League** in the tray menu to launch automatically when the 
 
 ## Feedback
 
-Choose **Send feedback** from the tray menu or the **?** About window. Select **Bug**, **Suggestion**, or **Incorrect stats** and describe what happened; the report includes the app version and selected game mode. A reply address and technical details are optional. You can review the report before sharing it. Technical details use a limited set of app/environment fields, not raw logs or League credentials.
+Choose **Send feedback** from the tray menu or at the top of the compact **?** help window. Keyboard shortcuts stay visible there; **Full guide** opens this README and **About & policies** expands a scrollable details panel. Select **Bug**, **Suggestion**, or **Incorrect stats** and describe what happened; the report includes the app version and selected game mode. A reply address and technical details are optional. You can review the report before sharing it. Technical details use a limited set of app/environment fields, not raw logs or League credentials.
 
 **Open email draft** prepares a message to **amangousa@gmail.com** in your email app. Review it and press Send there; opening a draft does not submit feedback. You can attach a screenshot yourself in the email app. If no email app is configured, choose **Copy report** and paste it into your preferred email service. No GitHub account is required for email feedback.
 

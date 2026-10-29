@@ -1357,55 +1357,87 @@ class Companion:
             screenshot_hint="Attach a screenshot in your email app, if useful.")
 
     def help(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("About Mayhem Companion")
+        dialog = getattr(self, "help_dialog", None)
+        if dialog is not None and dialog.winfo_exists():
+            dialog.deiconify()
+            dialog.lift()
+            dialog.focus_force()
+            return
+        dialog = self.help_dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        dialog.title("Help & feedback — Mayhem Companion")
         dialog.configure(bg=BG)
         dialog.attributes("-topmost", True)
-        content = (
-            "Ctrl+Alt+M   Show / hide\nCtrl+Alt+L   Toggle click-through\nCtrl+Alt+S   Resume scanning\n\n"
-            "The panel appears for ARAM, Mayhem and Arena champion select and matches, then hides after the match. "
-            "Ctrl+Alt+M can open it manually outside a match.\n\n"
-            "The header's Auto / ARAM / Arena / TFT selector follows the game or opens a reference manually. "
-            "Arena uses separate champion, augment and individual-item statistics. Its source's win rate "
-            "does not specify the placement cutoff; it is not labeled as first place. Missing pairs stay blank "
-            "and small samples are marked. Arena augment levels are combined by the source.\n\n"
-            "TFT appears when a TFT game starts and uses separate TFT data. Comps and items show "
-            "average placement, top-four and first-place rates when published. Augment help is an "
-            "expert tier/reference lookup, not augment win rates. The displayed queue and rank identify "
-            "the sample. This version does not read your TFT board or automatically choose a comp.\n\n"
-            "The M icon in the Windows tray also opens the panel. Right-click it for Show, Hide, or Exit. "
-            "Showing from the tray unlocks click-through controls.\n\n"
-            "Start with League in the tray menu enables a small Windows sign-in watcher. "
-            "It launches the companion once when League opens. Exit stays effective until you restart League.\n\n"
-            "Use borderless or windowed League. Drag MAYHEM to move the panel outside the augment cards. "
-            "Keep League focused for automatic reading. English augment titles are supported.\n\n"
-            "Manual lookup: type a champion or augment, choose from the dropdown, then press Enter. "
-            "Auto follows your champion in champion select and in game. Pick filters are manual; All picks is the default.\n\n"
-            "Spells shows champion-specific spell-pair rates, game counts and pick rates. "
-            "Spells opens during champion select, with your current pair highlighted. "
-            "These are pair statistics, not individual-spell rates.\n\n"
-            "Builds opens during play between augment choices. It shows the most-played core item sets "
-            "for your champion, with win rates, pick rates and game counts. Switch build type or sorting above the sets. "
-            "The filtered core item sets are not a purchase order. "
-            "After three completed non-boot items, Builds matches your inventory to a core set and shows "
-            "follow-up item rates, excluding items you own. These are individual later-item rates, not a "
-            "six-item combination's win rate. The core purchase order defaults to the most-played order; "
-            "choose another order above the icons if it matches what you bought. Boots and components "
-            "do not count toward the three-item trigger. "
-            "Detected choices open Augments, then Builds returns after they disappear. "
-            "Manual tab changes stay until the next selection or game phase.\n\n"
-            "Rates come from ARAMKit's third-party sample, not all servers. Low samples are marked; "
-            "missing champion data stays blank. Screenshots stay in memory on this computer.\n\n"
-            "Riot's developer policy prohibits augment win-rate displays in apps and overlays. "
-            "This personal prototype is not Riot-approved.\n\n"
+        dialog.resizable(False, False)
+        dialog.bind("<Escape>", lambda _: dialog.destroy())
+        content = tk.Frame(dialog, bg=BG)
+        content.pack(fill="both", expand=True, padx=20, pady=18)
+        heading = tk.Frame(content, bg=BG)
+        heading.pack(fill="x", pady=(0, 16))
+        self.label(heading, "Help & feedback", 14, TEXT, True).pack(side="left")
+        self.label(heading, f"v{__version__}", 9, MUTED).pack(side="right")
+
+        def feedback():
+            dialog.destroy()
+            self.show_feedback()
+
+        send = self.button(content, "Send feedback", feedback, ACCENT)
+        send.configure(fg=BG, font=("Segoe UI", 11, "bold"), pady=9)
+        send.pack(fill="x", pady=(0, 18))
+        shortcuts = tk.Frame(content, bg=BG)
+        shortcuts.pack(fill="x", pady=(0, 16))
+        shortcuts.columnconfigure(1, weight=1)
+        for row, (keys, action) in enumerate((
+                ("Ctrl+Alt+M", "Show / hide companion"),
+                ("Ctrl+Alt+L", "Toggle click-through"),
+                ("Ctrl+Alt+S", "Resume / rescan"))):
+            self.label(shortcuts, keys, 10, TEXT).grid(row=row, column=0, sticky="w", padx=(0, 18), pady=4)
+            self.label(shortcuts, action, 10, MUTED).grid(row=row, column=1, sticky="w", pady=4)
+        links = tk.Frame(content, bg=BG)
+        links.pack(fill="x")
+        self.button(links, "Full guide", lambda: webbrowser.open(
+            "https://github.com/MrMegaMango/mayhem-companion#readme")).pack(side="left")
+        details = tk.Frame(content, bg=PANEL)
+        details_text = tk.Text(details, height=7, width=38, wrap="word", bg=PANEL, fg=MUTED,
+                               relief="flat", padx=10, pady=10, font=("Segoe UI", 9))
+        details_text.insert("1.0", (
+            "This personal prototype is not Riot-approved. Riot's developer policy lists augment "
+            "and Arena-item win-rate displays as an unapproved use case.\n\n"
             "Mayhem Companion is not endorsed by Riot Games and does not reflect the views or opinions "
             "of Riot Games or anyone officially involved in producing or managing Riot Games properties. "
             "Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc."
-        )
-        self.label(dialog, content, 10, MUTED, wraplength=420, justify="left").pack(padx=20, pady=18)
-        self.button(dialog, "Riot policy", lambda: webbrowser.open(POLICY_URL)).pack(side="left", padx=(20, 8))
-        self.button(dialog, "Send feedback", self.show_feedback).pack(side="left")
-        self.button(dialog, "Close", dialog.destroy).pack(side="right", padx=20, pady=10)
+        ))
+        details_text.configure(state="disabled")
+        scroll = ttk.Scrollbar(details, command=details_text.yview)
+        details_text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        details_text.pack(side="top", fill="both", expand=True)
+        self.button(details, "Riot policy", lambda: webbrowser.open(POLICY_URL)).pack(
+            side="bottom", anchor="w", padx=10, pady=(0, 10))
+
+        def fit():
+            dialog.update_idletasks()
+            width, height = max(440, dialog.winfo_reqwidth()), dialog.winfo_reqheight()
+            x, y, _ = self.panel_placement(height + 60, self.settings.get("position"))
+            work = self._last_display["work_area"]
+            height = min(height, work[3] - work[1] - 60)
+            x, y, _ = place_panel(self._last_display, width + 16, height + 60, (x, y))
+            dialog.geometry(f"{width}x{height}+{x + 8}+{y + 40}")
+
+        def toggle_details():
+            if details.winfo_manager():
+                details.pack_forget()
+                about.configure(text="About & policies")
+            else:
+                details.pack(fill="both", expand=True, pady=(14, 0))
+                about.configure(text="Hide details")
+            fit()
+
+        about = self.button(links, "About & policies", toggle_details)
+        about.pack(side="right")
+        fit()
+        dialog.deiconify()
+        dialog.lift()
 
     def close(self):
         if self._closed:
