@@ -70,7 +70,15 @@ def _merge_names(observed, reference):
     observed_names = {normalize_title(row["name"]) for row in observed.values()}
     merged = {key: row for key, row in reference.items()
               if key not in observed and normalize_title(row["name"]) not in observed_names}
-    merged.update(observed)
+    for key, row in observed.items():
+        ref = reference.get(key, {})
+        if (row.get("rarity") not in ("silver", "gold", "prismatic")
+                and ref.get("rarity") in ("silver", "gold", "prismatic")
+                and normalize_title(row["name"]) == normalize_title(ref.get("name", ""))):
+            # An observed name can omit rarity. Preserve independently verified
+            # reference metadata only when both identity and name agree.
+            row = {**row, "rarity": ref["rarity"]}
+        merged[key] = row
     return merged
 
 

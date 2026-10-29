@@ -147,6 +147,16 @@ class ArenaParsingTests(unittest.TestCase):
         self.assertFalse(any("win_rate" in row for row in reference.values()))
         self.assertEqual(len(reference), len({row["name"] for row in reference.values()}))
 
+    def test_matching_observed_name_keeps_reference_rarity_when_source_omits_it(self):
+        observed = {"2107": {"id": "2107", "name": "Hellbent", "rarity": "", "description": "Source text"}}
+        reference = {"2107": {"id": "2107", "name": "Hellbent", "rarity": "prismatic"}}
+        merged = _merge_names(observed, reference)
+        self.assertEqual(merged["2107"]["rarity"], "prismatic")
+        self.assertEqual(merged["2107"]["description"], "Source text")
+        self.assertEqual(observed["2107"]["rarity"], "")
+        reference["2107"]["name"] = "Another augment"
+        self.assertEqual(_merge_names(observed, reference)["2107"]["rarity"], "")
+
     def test_observed_id_wins_conflicting_reference_name(self):
         observed = {"99": {"id": "99", "name": "Goliath", "description": "Source text"}}
         merged = _merge_names(observed, {"41": {"id": "41", "name": "Goliath"}})

@@ -2,7 +2,8 @@
 
 Only the page's selected champion, aggregate augments, and item observations are
 read. Qwik's object references are data, never code. Augment IDs are translated
-by an unambiguous English name match into the caller's Arena reference catalog.
+by unambiguous English names, or by reference IDs only after validating the
+source's entire named ID namespace against the caller's Arena reference catalog.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ MAX_BYTES = 3_000_000
 MAX_OBJECTS = 50_000
 MAX_ROWS = 2_000
 MAX_DECODED = 100_000
+MIN_ID_ANCHORS = 100
 
 
 def _error(message):
@@ -160,6 +162,46 @@ def _rows(value, length):
     return result
 
 
+def _verified_reference_entries(source_augments, references, reference_ids):
+    """Recover stale labels only after the full named source proves ID alignment.
+
+    In the verified 16.21 snapshot all 225 source names independently resolve to
+    the identical Riot ID. A partial, remapped or conflicting catalog must never
+    enable an ID-only join. Unnamed observations still require a unique reference
+    name, a unique ID entry, and an explicit Arena rarity.
+    """
+    if len(source_augments) < MIN_ID_ANCHORS:
+        return {}
+    seen_names = set()
+    # The label catalog also includes crafting choices with rarity 4. Their
+    # verified names/IDs remain anchors; only recovered playable rows need a
+    # silver/gold/prismatic rarity below.
+    for source_id, entry in source_augments.items():
+        if (not isinstance(source_id, str) or not re.fullmatch(r"[1-9][0-9]{0,9}", source_id)
+                or not isinstance(entry, list) or len(entry) != 2):
+            return {}
+        try:
+            normalized = normalize_title(_name(entry[0]))
+        except DataUnavailableError:
+            return {}
+        candidates = references.get(normalized, [])
+        if (normalized in seen_names or len(candidates) != 1 or candidates[0][0] != source_id
+                or len(reference_ids.get(source_id, [])) != 1):
+            return {}
+        seen_names.add(normalized)
+    recovered = {}
+    for ident, entries in reference_ids.items():
+        if len(entries) != 1:
+            continue
+        name, rarity = entries[0]
+        if rarity not in ("silver", "gold", "prismatic"):
+            continue
+        candidates = references.get(normalize_title(name), [])
+        if len(candidates) == 1 and candidates[0][0] == ident:
+            recovered[ident] = (name, ("silver", "gold", "prismatic").index(rarity))
+    return recovered
+
+
 def _route(url):
     if not isinstance(url, str):
         raise _error("invalid source URL")
@@ -250,7 +292,7 @@ def parse_champion(html, champion, url, augment_catalog, *, expected_patch=None)
                    "first_rate": None, "avg_placement": None, "low_sample": count < 200}
         # First-place and average placement remain unknown here: no inferred
         # cutoff, weighted histogram, or rounded derived metric is presented.
-        references = {}
+        references, reference_ids = {}, {}
         if not isinstance(augment_catalog, dict) or len(augment_catalog) > MAX_ROWS:
             raise _error("invalid reference catalog")
         for key, reference in augment_catalog.items():
@@ -261,14 +303,21 @@ def parse_champion(html, champion, url, augment_catalog, *, expected_patch=None)
             if not re.fullmatch(r"[1-9][0-9]{0,9}", ident) or str(reference.get("id", ident)) != ident:
                 raise _error("invalid reference identity")
             references.setdefault(normalize_title(name), []).append((ident, name))
+            reference_ids.setdefault(ident, []).append((name, reference.get("rarity")))
+        recovered = _verified_reference_entries(source_augments, references, reference_ids)
         aggregate = graph.read(stats_raw["augment"])
         if not isinstance(aggregate, dict) or "augment0" not in aggregate:
             raise _error("missing aggregate augment observations")
         augments, mapped = [], set()
         for ident, rate, samples in _rows(aggregate["augment0"], 4):
+            if ident == "0":
+                continue
             entry = source_augments.get(ident)
-            if entry is None:
-                continue  # Source's ID 0 and unlabelled values have no identity.
+            if ident not in source_augments:
+                reference = recovered.get(ident)
+                if reference is None:
+                    continue
+                entry = list(reference)
             if (not isinstance(entry, list) or len(entry) != 2 or type(entry[1]) is not int
                     or entry[1] not in (0, 1, 2)):
                 raise _error("invalid augment identity")

@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from mayhem.arena_lolalytics import MAX_BYTES, MAX_OBJECTS, champion_url, parse_champion
+from mayhem.arena_lolalytics import MAX_BYTES, MAX_OBJECTS, MIN_ID_ANCHORS, champion_url, parse_champion
 from mayhem.data import DataUnavailableError
 
 
@@ -65,6 +65,22 @@ def page(data=None, *, canonical=CANONICAL, transform=None):
         transform(encoded)
     return (f'<html><head><link rel="canonical" href="{canonical}"></head>'
             '<body><script type="qwik/json">' + json.dumps(encoded) + '</script></body></html>')
+
+
+def anchored_fixture(anchor_count=MIN_ID_ANCHORS):
+    data = fixture()
+    names = {"58": ["Mystic Punch", 2]}
+    reference = {"58": {"id": "58", "name": "Mystic Punch", "rarity": "prismatic"},
+                 "1344": {"id": "1344", "name": "Final Form", "rarity": "prismatic"}}
+    for i in range(anchor_count - 1):
+        ident, name = str(10000 + i), f"Anchor {i}"
+        names[ident] = [name, 1]
+        reference[ident] = {"id": ident, "name": name, "rarity": "gold"}
+    data["catalog"]["augments"] = names
+    data["statistics"]["augment"]["augment0"] = [
+        [58, 61.04, 19.01, 4158], [1344, 56.09, 3.83, 838],
+        [0, 15.81, 38.4, 8398], [999999, 77, 0.1, 5]]
+    return data, reference
 
 
 class LolalyticsArenaTests(unittest.TestCase):
@@ -212,6 +228,57 @@ class LolalyticsArenaTests(unittest.TestCase):
         def unrelated(encoded):
             encoded["objs"].append({"some_unrelated_component": "not-a-reference"})
         self.assertEqual(self.parse(page(transform=unrelated))["champion_id"], "39")
+
+    def test_recovers_unlabelled_ids_only_after_full_catalog_alignment(self):
+        data, reference = anchored_fixture()
+        result = self.parse(page(data), reference=reference)
+        rows = {row["id"]: row for row in result["augments"]}
+        self.assertEqual(set(rows), {"58", "1344"})  # ID 0 and unknown IDs stay omitted.
+        self.assertEqual(rows["1344"]["name"], "Final Form")
+        self.assertAlmostEqual(rows["1344"]["win_rate"], .5609)
+        self.assertEqual(rows["1344"]["sample_count"], 838)
+        self.assertEqual(rows["1344"]["rarity"], "prismatic")
+
+    def test_crafting_choice_labels_are_valid_identity_anchors(self):
+        data, reference = anchored_fixture()
+        data["catalog"]["augments"]["10000"][1] = 4
+        rows = self.parse(page(data), reference=reference)["augments"]
+        self.assertEqual({row["id"] for row in rows}, {"58", "1344"})
+
+    def test_tiny_catalog_does_not_enable_numeric_recovery(self):
+        data, reference = anchored_fixture(MIN_ID_ANCHORS - 1)
+        self.assertEqual([row["id"] for row in self.parse(page(data), reference=reference)["augments"]], ["58"])
+
+    def test_any_unobserved_anchor_conflict_disables_numeric_recovery(self):
+        for change in ("unknown_name", "remapped_id", "duplicate_name", "ambiguous_reference", "bad_shape"):
+            data, reference = anchored_fixture()
+            if change == "unknown_name":
+                data["catalog"]["augments"]["10000"][0] = "Unrecognized source name"
+            elif change == "remapped_id":
+                entry = reference.pop("10000")
+                reference["50000"] = {**entry, "id": "50000"}
+            elif change == "duplicate_name":
+                data["catalog"]["augments"]["10000"][0] = "Anchor 1"
+            elif change == "ambiguous_reference":
+                reference["50000"] = {"id": "50000", "name": "Anchor 0", "rarity": "gold"}
+            else:
+                data["catalog"]["augments"]["10000"].append("unexpected")
+            with self.subTest(change=change):
+                self.assertEqual([row["id"] for row in self.parse(page(data), reference=reference)["augments"]], ["58"])
+
+    def test_unlabelled_entry_requires_unique_name_identity_and_explicit_rarity(self):
+        for change in ("ambiguous_name", "ambiguous_id", "missing_rarity", "invalid_rarity"):
+            data, reference = anchored_fixture()
+            if change == "ambiguous_name":
+                reference["51344"] = {"id": "51344", "name": "Final-Form", "rarity": "prismatic"}
+            elif change == "ambiguous_id":
+                reference[1344] = {"id": "1344", "name": "Different Final Form", "rarity": "prismatic"}
+            elif change == "missing_rarity":
+                reference["1344"].pop("rarity")
+            else:
+                reference["1344"]["rarity"] = "unknown"
+            with self.subTest(change=change):
+                self.assertEqual([row["id"] for row in self.parse(page(data), reference=reference)["augments"]], ["58"])
 
     def test_champion_url_handles_internal_patch_and_verified_special_routes(self):
         self.assertEqual(champion_url(CHAMPION, "26.21"), URL)
