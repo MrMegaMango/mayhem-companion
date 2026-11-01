@@ -401,9 +401,114 @@ class StateTests(unittest.TestCase):
         app.panel_placement = Mock()
         app.check_placement()
         app.panel_placement.assert_not_called()
-        app.end_drag(None)
+        app.settings, app.settings_path = {}, Mock()
+        app.root.winfo_x.return_value, app.root.winfo_y.return_value = 100, 120
+        with patch("mayhem.app.list_displays", return_value=[]):
+            app.end_drag(None)
         self.assertIsNone(app.drag_start)
         app.root.after.assert_called_with(150, app.check_placement)
+
+    def test_fit_window_does_not_reposition_during_active_drag(self):
+        app = self.make_view()
+        app.drag_start = (10, 10)
+        app.panel_placement = Mock()
+        Companion.fit_window(app)
+        app.root.update_idletasks.assert_not_called()
+        app.panel_placement.assert_not_called()
+        app.root.geometry.assert_not_called()
+
+    def test_release_without_active_drag_does_not_change_position_or_settings(self):
+        app = self.make_view()
+        app.hidden = False
+        app.settings = {"position": [-1000, -320], "display_preference": "portrait"}
+        app.settings_path = Mock()
+        with patch("mayhem.app.list_displays") as displays:
+            app.end_drag(Mock(x_root=100, y_root=100))
+        self.assertEqual(app.settings, {"position": [-1000, -320], "display_preference": "portrait"})
+        displays.assert_not_called()
+        app.root.update_idletasks.assert_not_called()
+        app.root.after.assert_not_called()
+        app.settings_path.write_text.assert_not_called()
+
+    def test_drag_release_saves_settled_negative_position_and_portrait_destination(self):
+        app = self.make_view()
+        app.hidden = False
+        app.drag_start = (10, 10)
+        app.settings = {"display_device": "main", "display_preference": "any"}
+        app.settings_path = Mock()
+        app.root.winfo_x.return_value, app.root.winfo_y.return_value = 1200, 100
+        portrait = {"device": "portrait", "bounds": (-1080, -400, 0, 1520),
+                    "work_area": (-1080, -400, 0, 1480), "primary": False}
+        main = {"device": "main", "bounds": (0, 0, 3840, 2160),
+                "work_area": (0, 0, 3840, 2100), "primary": True}
+
+        def settle_geometry():
+            self.assertEqual(app.drag_start, (10, 10))
+            app.root.winfo_x.return_value, app.root.winfo_y.return_value = -1000, -320
+
+        app.root.update_idletasks.side_effect = settle_geometry
+        with patch("mayhem.app.list_displays", return_value=[main, portrait]):
+            app.end_drag(Mock(x_root=-990, y_root=-310))
+        self.assertIsNone(app.drag_start)
+        saved = json.loads(app.settings_path.write_text.call_args.args[0])
+        self.assertEqual(saved["position"], [-1000, -320])
+        self.assertEqual(saved["display_device"], "portrait")
+        self.assertEqual(saved["display_preference"], "portrait")
+        app.root.after.assert_called_with(150, app.check_placement)
+
+    def test_deliberate_landscape_drop_replaces_old_portrait_preference(self):
+        app = self.make_view()
+        app.hidden = False
+        app.drag_start = (10, 10)
+        app.settings = {"display_device": "portrait", "display_preference": "portrait"}
+        app.settings_path = Mock()
+        app.root.winfo_x.return_value, app.root.winfo_y.return_value = 1200, 100
+        portrait = {"device": "portrait", "bounds": (-1080, -400, 0, 1520),
+                    "work_area": (-1080, -400, 0, 1480), "primary": False}
+        main = {"device": "main", "bounds": (0, 0, 3840, 2160),
+                "work_area": (0, 0, 3840, 2100), "primary": True}
+        with patch("mayhem.app.list_displays", return_value=[main, portrait]):
+            app.end_drag(Mock(x_root=1210, y_root=110))
+            self.assertEqual(app.panel_placement(600, (1200, 100)), (1200, 100, 600))
+        self.assertEqual(app.settings["display_device"], "main")
+        self.assertEqual(app.settings["display_preference"], "any")
+        saved = json.loads(app.settings_path.write_text.call_args.args[0])
+        self.assertEqual(saved["position"], [1200, 100])
+        self.assertEqual(saved["display_device"], "main")
+
+    def test_drag_release_uses_pointer_monitor_when_window_straddles_displays(self):
+        app = self.make_view()
+        app.drag_start = (200, 10)
+        app.settings = {"display_device": "portrait", "display_preference": "portrait"}
+        app.settings_path = Mock()
+        app.root.winfo_x.return_value, app.root.winfo_y.return_value = -100, 100
+        portrait = {"device": "portrait", "bounds": (-1080, -400, 0, 1520),
+                    "work_area": (-1080, -400, 0, 1480), "primary": False}
+        main = {"device": "main", "bounds": (0, 0, 3840, 2160),
+                "work_area": (0, 0, 3840, 2100), "primary": True}
+        with patch("mayhem.app.list_displays", return_value=[main, portrait]):
+            app.end_drag(Mock(x_root=100, y_root=110))
+        self.assertEqual(app.settings["display_device"], "main")
+        self.assertEqual(app.settings["display_preference"], "any")
+
+    def test_drag_release_tolerates_monitor_and_settings_write_failures(self):
+        for monitor_failure, save_failure in ((True, False), (False, True), (True, True)):
+            with self.subTest(monitor_failure=monitor_failure, save_failure=save_failure):
+                app = self.make_view()
+                app.hidden = False
+                app.drag_start = (10, 10)
+                app.settings = {"display_device": "portrait", "display_preference": "portrait"}
+                app.settings_path = Mock()
+                if save_failure:
+                    app.settings_path.write_text.side_effect = OSError("read-only settings")
+                app.root.winfo_x.return_value, app.root.winfo_y.return_value = -1000, -320
+                with patch("mayhem.app.list_displays", side_effect=OSError("monitor unavailable")
+                           if monitor_failure else None, return_value=[]):
+                    app.end_drag(None)
+                self.assertIsNone(app.drag_start)
+                self.assertEqual(app.settings["display_device"], "portrait")
+                self.assertEqual(app.settings["position"], [-1000, -320])
+                app.root.after.assert_called_with(150, app.check_placement)
 
     def test_close_preserves_display_preference_and_negative_position(self):
         app = self.make_view()

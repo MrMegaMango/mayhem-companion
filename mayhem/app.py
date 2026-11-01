@@ -167,7 +167,11 @@ class Companion:
         root.geometry(f"440x{height}+{x}+{y}")
         self.shell = tk.Frame(root, bg=BG, highlightbackground=BORDER, highlightthickness=1)
         self.shell.pack(fill="both", expand=True)
-        header = tk.Frame(self.shell, bg=BG)
+        # Keep header padding inside the drag surface, rather than leaving
+        # a dead strip on the shell above and beside the visible controls.
+        self.titlebar = tk.Frame(self.shell, bg=BG, cursor="fleur")
+        self.titlebar.pack(fill="x")
+        header = tk.Frame(self.titlebar, bg=BG, cursor="fleur")
         header.pack(fill="x", padx=16, pady=(12, 8))
         brand = self.label(header, "MAYHEM", 10, ACCENT, True)
         self.brand = brand
@@ -182,7 +186,8 @@ class Companion:
         self.button(header, "×", self.close, BG).pack(side="right")
         self.button(header, "—", self.toggle_visible, BG).pack(side="right")
         self.button(header, "?", self.help, BG).pack(side="right")
-        for widget in [header, brand, self.badge]:
+        for widget in [self.titlebar, header, brand, self.badge]:
+            widget.configure(cursor="fleur")
             widget.bind("<ButtonPress-1>", self.start_drag)
             widget.bind("<B1-Motion>", self.drag)
             widget.bind("<ButtonRelease-1>", self.end_drag)
@@ -421,8 +426,29 @@ class Companion:
         if self.drag_start:
             self.root.geometry(f"+{event.x_root-self.drag_start[0]}+{event.y_root-self.drag_start[1]}")
 
-    def end_drag(self, _event):
+    def end_drag(self, event):
+        if self.drag_start is None:
+            return
+        # Flush the last motion before recording it. Layout callbacks must
+        # continue to defer until the drag has finished.
+        self.root.update_idletasks()
         self.drag_start = None
+        position = (self.root.winfo_x(), self.root.winfo_y())
+        drop = (event.x_root, event.y_root) if event is not None else position
+        try:
+            display = select_display(list_displays(), position=drop)
+            if display is not None:
+                self._last_display = display
+                self.settings["display_device"] = display["device"]
+                left, top, right, bottom = display["bounds"]
+                self.settings["display_preference"] = "portrait" if bottom - top > right - left else "any"
+        except OSError:
+            pass
+        self.settings["position"] = list(position)
+        try:
+            self.settings_path.write_text(json.dumps(self.settings), encoding="utf-8")
+        except OSError:
+            logging.warning("Could not save the dragged panel position")
         self.schedule_placement_check()
 
     def filter_champions(self, event):
@@ -862,6 +888,8 @@ class Companion:
         return place_panel(display, 440, height, position)
 
     def fit_window(self):
+        if self.drag_start is not None:
+            return
         self.root.update_idletasks()
         canvas = getattr(self, "build_scroll", None)
         results = getattr(self, "build_results", None)
