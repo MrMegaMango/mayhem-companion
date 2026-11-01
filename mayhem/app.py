@@ -169,9 +169,9 @@ class Companion:
         self.shell.pack(fill="both", expand=True)
         # Keep header padding inside the drag surface, rather than leaving
         # a dead strip on the shell above and beside the visible controls.
-        self.titlebar = tk.Frame(self.shell, bg=BG, cursor="fleur")
+        self.titlebar = tk.Frame(self.shell, bg=BG)
         self.titlebar.pack(fill="x")
-        header = tk.Frame(self.titlebar, bg=BG, cursor="fleur")
+        header = tk.Frame(self.titlebar, bg=BG)
         header.pack(fill="x", padx=16, pady=(12, 8))
         brand = self.label(header, "MAYHEM", 10, ACCENT, True)
         self.brand = brand
@@ -187,7 +187,6 @@ class Companion:
         self.button(header, "—", self.toggle_visible, BG).pack(side="right")
         self.button(header, "?", self.help, BG).pack(side="right")
         for widget in [self.titlebar, header, brand, self.badge]:
-            widget.configure(cursor="fleur")
             widget.bind("<ButtonPress-1>", self.start_drag)
             widget.bind("<B1-Motion>", self.drag)
             widget.bind("<ButtonRelease-1>", self.end_drag)
