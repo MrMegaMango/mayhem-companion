@@ -610,13 +610,13 @@ class Companion:
         self.build_group = tk.StringVar(value="")
         self.build_group_box = ttk.Combobox(toolbar, textvariable=self.build_group,
                                             state="readonly", width=17)
-        self.build_group_box.pack(side="left")
+        # Show this only when owned cores have distinct follow-up samples.
         self.build_group_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
         self.build_sort = tk.StringVar(value="Win rate")
-        sort_box = ttk.Combobox(toolbar, textvariable=self.build_sort, state="readonly", width=10,
-                               values=["Win rate", "Games", "Pick rate"])
-        sort_box.pack(side="right")
-        sort_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
+        self.build_sort_box = ttk.Combobox(toolbar, textvariable=self.build_sort, state="readonly", width=10,
+                                          values=["Win rate", "Games"])
+        self.build_sort_box.pack(side="right")
+        self.build_sort_box.bind("<<ComboboxSelected>>", lambda _: self.render_builds())
         self.build_summary = tk.StringVar(value="Choose a champion to see core builds.")
         self.label(self.build_panel, size=9, color=MUTED, textvariable=self.build_summary,
                    wraplength=398, anchor="w", justify="left").pack(fill="x", pady=(0, 8))
@@ -729,6 +729,7 @@ class Companion:
         self.build_context_panel.pack_forget()
         self.build_group.set("")
         self.build_group_box["values"] = []
+        self.build_group_box.pack_forget()
         for card in self.build_cards:
             card["frame"].pack_forget()
         self.build_note.set("")
@@ -758,6 +759,7 @@ class Companion:
 
     def render_builds(self):
         self.build_context_panel.pack_forget()
+        self.build_group_box.pack_forget()
         for card in self.build_cards:
             card["frame"].pack_forget()
             for item in card["items"]:
@@ -774,6 +776,10 @@ class Companion:
         groups = [group for group in self.build_data["groups"] if group["rows"]]
         completed = self.completed_items()
         later = completed is not None and len(completed) >= 3
+        sorts = ["Win rate", "Games", "Pick rate"] if later else ["Win rate", "Games"]
+        self.build_sort_box.configure(values=sorts)
+        if self.build_sort.get() not in sorts:
+            self.build_sort.set("Win rate")
         if later:
             # Inventory slots do not reveal purchase order. Match an owned
             # core set, then disclose/select the source's actual order below.
@@ -787,7 +793,14 @@ class Companion:
                         matches.append({**group, "label": f"{group['label']} · core {index}",
                                         "profile": profile})
             groups = sorted(matches, key=lambda group: group["profile"]["sample_count"], reverse=True)
-        self.build_group_box["values"] = [group["label"] for group in groups]
+            if len(groups) > 1:
+                self.build_group_box.pack(side="left")
+        else:
+            # Rank every archetype together, preserving each core's own
+            # win rate and sample. Archetype-relative pick rates do not compare.
+            rows = [row for group in groups for row in group["rows"]]
+            groups = [{"label": "All builds", "rows": rows}] if rows else []
+        self.build_group_box["values"] = [group["label"] for group in groups] if later else []
         if not groups:
             self.build_group.set("")
             self.build_summary.set("No follow-up data matches your completed items." if later
@@ -852,9 +865,8 @@ class Companion:
                     self.render_build_item(item, row["item_names"][index], url)
                 card["value"].configure(text=f"{rate * 100:.1f}%" if rate is not None and count else "—")
                 parts = [f"{compact_count(count)} games"]
-                if pick is not None:
-                    parts.append(f"{pick * 100:.1f}% of this order" if later
-                                 else f"{pick * 100:.1f}% of {group['label']} builds")
+                if later and pick is not None:
+                    parts.append(f"{pick * 100:.1f}% of this order")
                 if low:
                     parts.append("LOW SAMPLE")
                 card["meta"].configure(text=" · ".join(parts), fg=AMBER if low else MUTED)

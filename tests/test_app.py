@@ -92,7 +92,7 @@ class StateTests(unittest.TestCase):
         app.build_group, app.build_sort = Mock(), Mock()
         app.build_group.get.return_value = "AP"
         app.build_sort.get.return_value = "Games"
-        app.build_group_box = MagicMock()
+        app.build_group_box, app.build_sort_box = MagicMock(), MagicMock()
         app.build_summary, app.build_note, app.build_note_label = Mock(), Mock(), Mock()
         app.live_spells = []
         app.spell_tree = Mock()
@@ -1058,7 +1058,7 @@ class StateTests(unittest.TestCase):
         for card in app.build_cards:
             card["frame"].pack_forget.assert_called_once()
 
-    def test_build_cards_default_to_games_and_keep_sets_low_samples_and_source_clear(self):
+    def test_build_cards_explicit_games_sort_keeps_sets_low_samples_and_source_clear(self):
         app = self.make_view()
         app.view.get.return_value = "builds"
         app.build_data = {"version": "16.21", "data_date": "2026-10-25", "stale": True, "groups": [
@@ -1071,12 +1071,36 @@ class StateTests(unittest.TestCase):
         app.render_builds()
         self.assertIn("Liandry", app.build_cards[0]["items"][0]["name"].configure.call_args.kwargs["text"])
         app.build_cards[0]["value"].configure.assert_called_with(text="52.0%")
-        self.assertIn("60.0% of AP builds", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
+        self.assertIn("10.0k games", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
+        self.assertNotIn("% of", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
         self.assertIn("LOW SAMPLE", app.build_cards[1]["meta"].configure.call_args.kwargs["text"])
         app.build_cards[2]["value"].configure.assert_called_with(text="—")
         app.build_cards[3]["frame"].pack.assert_not_called()
         self.assertIn("cached/offline", app.source.set.call_args.args[0])
         app.icons.request.assert_not_called()
+
+    def test_initial_builds_rank_all_archetypes_globally_without_a_category_filter(self):
+        app = self.make_view()
+        app.view.get.return_value = "builds"
+        app.build_sort.get.return_value = "Win rate"
+        row = lambda name, rate, count: {
+            "item_names": [name, "Second", "Third"], "win_rate": rate,
+            "sample_count": count, "pick_rate": .9}
+        app.build_data = {"groups": [
+            {"label": "AP", "rows": [row("Popular AP", .52, 10000),
+                                      row("Tied AP", .6, 300), row("No rate", None, 0)]},
+            {"label": "AD", "rows": [row("Best AD", .8, 50), row("Tied AD", .6, 1000)]}]}
+        app.render_builds()
+        self.assertEqual([card["items"][0]["name"].configure.call_args.kwargs["text"]
+                          for card in app.build_cards],
+                         ["Best AD", "Tied AD", "Tied AP", "Popular AP", "No rate"])
+        self.assertEqual([card["value"].configure.call_args.kwargs["text"] for card in app.build_cards],
+                         ["80.0%", "60.0%", "60.0%", "52.0%", "—"])
+        self.assertIn("LOW SAMPLE", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
+        for card in app.build_cards:
+            self.assertNotIn("% of", card["meta"].configure.call_args.kwargs["text"])
+        app.build_group_box.pack.assert_not_called()
+        app.build_group_box.pack_forget.assert_called()
 
     def test_build_icons_use_cached_images_and_request_missing_ones_without_hiding_names(self):
         app = self.make_view()
@@ -1130,6 +1154,53 @@ class StateTests(unittest.TestCase):
         self.assertIn("Most played", app.build_order.get())
         app.build_core_items[0]["name"].configure.assert_called_with(text="1. One")
         self.assertIn("of this order", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
+
+    def test_followup_core_selector_only_appears_for_multiple_matching_cores(self):
+        app = self.followup_view()
+        app.render_builds()
+        app.build_group_box.pack.assert_not_called()
+        app.build_group_box.pack_forget.assert_called()
+        extra_core = {"item_ids": ["1", "2", "4"], "item_names": ["One", "Two", "Four"],
+                      "sample_count": 500, "win_rate": .65, "pick_rate": .7}
+        app.build_data["groups"].append({"label": "AD", "rows": [{**extra_core, "routes": [
+            {**extra_core, "later_items": [{"item_ids": ["6"], "item_names": ["Six"],
+                "item_icon_urls": [None], "sample_count": 250, "win_rate": .88, "pick_rate": .4}]}]}]})
+        app.live_items = ["1", "2", "3", "4"]
+        app.render_builds()
+        app.build_group_box.pack.assert_called()
+        choices = app.build_group_box.__setitem__.call_args.args[1]
+        self.assertEqual(len(choices), 2)
+        seen = set()
+        for choice in choices:
+            app.build_group.set(choice)
+            for card in app.build_cards:
+                card["frame"].pack.reset_mock()
+            app.render_builds()
+            name = app.build_cards[0]["items"][0]["name"].configure.call_args.kwargs["text"]
+            rate = app.build_cards[0]["value"].configure.call_args.kwargs["text"]
+            seen.add((name, rate))
+            self.assertIn("of this order", app.build_cards[0]["meta"].configure.call_args.kwargs["text"])
+            for card in app.build_cards[1:]:
+                card["frame"].pack.assert_not_called()
+        self.assertEqual(seen, {("Five", "60.0%"), ("Six", "88.0%")})
+        app.build_group_box.pack.reset_mock()
+        app.live_items = ["1", "2", "3"]
+        app.render_builds()
+        app.build_group_box.pack.assert_not_called()
+        app.build_cards[0]["items"][0]["name"].configure.assert_called_with(text="Four")
+
+    def test_leaving_followups_resets_incomparable_pick_rate_sort(self):
+        app = self.followup_view()
+        app.build_sort.get.return_value = "Pick rate"
+        app.build_sort.set.side_effect = lambda value: setattr(app.build_sort.get, "return_value", value)
+        app.render_builds()
+        self.assertEqual(app.build_sort.get(), "Pick rate")
+        app.live_items = []
+        app.build_group_box.pack.reset_mock()
+        app.render_builds()
+        self.assertEqual(app.build_sort.get(), "Win rate")
+        app.build_group_box.pack.assert_not_called()
+        self.assertIn("Core builds", app.build_summary.set.call_args.args[0])
 
     def test_boots_components_and_unknown_items_do_not_trigger_followups(self):
         app = self.followup_view()

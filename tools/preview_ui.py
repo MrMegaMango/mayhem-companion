@@ -309,6 +309,21 @@ def preview_class():
                 self.show_preview("builds")
                 self.fit_window()
                 self.root.update_idletasks()
+                assert self.build_sort.get() == "Win rate", "Initial builds must default to win rate"
+                assert tuple(self.build_sort_box["values"]) == ("Win rate", "Games"), "Initial sort includes incomparable pick rates"
+                assert not self.build_group_box.winfo_manager(), "Initial build category selector is visible"
+                all_cores = [row for group in self.build_data["groups"] for row in group["rows"]]
+                expected = sorted(all_cores, key=lambda row: (
+                    row["win_rate"] if row.get("win_rate") is not None else -1,
+                    row.get("sample_count", 0)), reverse=True)[:len(self.build_cards)]
+                shown = [card for card in self.build_cards if card["frame"].winfo_manager()]
+                assert len(shown) == len(expected), "Initial build rows are missing"
+                for card, row in zip(shown, expected):
+                    rate = row.get("win_rate")
+                    assert card["value"].cget("text") == (f"{rate * 100:.1f}%" if rate is not None else "—"), "Builds are not globally ranked by win rate"
+                    assert card["items"][0]["name"].cget("text") == row["item_names"][0], "Build ranking omitted a source archetype"
+                    assert "% of" not in card["meta"].cget("text"), "Initial build shows an archetype-specific pick rate"
+                report["checks"].append("global core-build win-rate order, no category filter, comparable sort choices")
                 assert self.root.winfo_height() <= 700, "Build window exceeds 700px"
                 for widget in (self.more_button, self.build_note_label):
                     bottom = widget.winfo_rooty() - self.root.winfo_rooty() + widget.winfo_height()
