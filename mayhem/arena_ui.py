@@ -7,6 +7,7 @@ from tkinter import messagebox, ttk
 import webbrowser
 
 from .data import resolve_champion_id
+from .data_timing import data_timing
 
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
@@ -326,19 +327,20 @@ class ArenaPanel(tk.Frame):
         sample = str(data.get("sample_label") or "Arena")
         if sample not in bits:
             bits.append(sample)
-        for key in ("version", "patch", "queue", "rank", "data_date"):
+        for key in ("version", "patch", "queue", "rank"):
             if data.get(key) and str(data[key]) not in bits:
                 bits.append(str(data[key]))
         if data.get("stale"):
             bits.append("CACHED")
-        self.source.set(" · ".join(bits))
+        self.source.set(" · ".join(bits) + "\n" + data_timing(data))
         self.source_url = data.get("source_url")
         self.tree.heading("win", text=label)
         return label
 
     def about_rates(self):
         data = self.current_metadata()
-        details = [str(data.get("rate_note") or "Rates describe the Arena source's match sample.")]
+        details = [str(data.get("rate_note") or "Rates describe the Arena source's match sample."),
+                   data_timing(data)]
         if data.get("sample_label"):
             details.append(str(data["sample_label"]))
         if (self.catalog or {}).get("catalog_note"):

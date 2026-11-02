@@ -106,6 +106,18 @@ class StateTests(unittest.TestCase):
         app.auto.get.return_value = True
         return app
 
+    def test_source_timing_keeps_displayed_cached_snapshot_date(self):
+        app = self.make_view()
+        app.catalog.update(version="16.22", data_date="2026-11-04")
+        app.update_source({"source": "ARAMKit", "version": "16.21",
+                           "data_date": "2026-10-30", "stale": True})
+        text = app.source.set.call_args.args[0]
+        self.assertIn("Patch 16.21", text)
+        self.assertIn("cached/offline", text)
+        self.assertIn("Match dates not published", text)
+        self.assertIn("Updated 2026-10-30", text)
+        self.assertNotIn("2026-11-04", text)
+
     def test_game_updates_resolve_locally_without_http(self):
         app = self.make_view()
         app.handle_game({"status": "live", "raw_champion": "game_character_displayname_Yasuo"})

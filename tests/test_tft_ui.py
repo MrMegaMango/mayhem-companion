@@ -4,7 +4,7 @@ import gc
 import tkinter as tk
 from tkinter import ttk
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from mayhem.tft_ui import TftPanel, filtered_rows, metric_values, resolve_choice, selection_choices, source_metadata
 
@@ -58,6 +58,44 @@ class DataPresentationTests(unittest.TestCase):
         self.assertNotIn("Ranked", text)
         self.assertEqual(url, "https://example.test/tiers")
         self.assertIn("Ranked", source_metadata(DATA, "comps")[0])
+
+    def test_stats_label_separates_unknown_match_dates_from_dataset_update(self):
+        data = {**DATA, "updated": "2026-11-01T20:00:00+00:00", "updated_scope": "dataset"}
+        text, _url = source_metadata(data, "comps")
+        context, timing = text.split("\n", 1)
+        self.assertNotIn("2026-11-01", context)
+        self.assertEqual(timing, "Match dates not published · Dataset updated 2026-11-01 20:00 UTC")
+
+    def test_augment_timing_never_inherits_statistical_update_or_sample_dates(self):
+        data = {**DATA, "updated": "2026-11-01T20:00:00Z", "data_date": "2026-11-01",
+                "updated_scope": "dataset", "fetched_at": "2026-11-01T21:00:00Z",
+                "_fetched_at": 1793566800, "sample_start": "2026-10-28",
+                "sample_end": "2026-11-01", "dateStats": [{"id": "2026-10-31"}]}
+        for view_meta in (DATA["view_meta"], {}, {"augments": {"updated": ""}}):
+            with self.subTest(view_meta=view_meta):
+                data["view_meta"] = view_meta
+                text, _url = source_metadata(data, "augments")
+                self.assertIn("Update date not published", text)
+                self.assertNotIn("2026-", text)
+                self.assertNotIn("Match dates", text)
+                self.assertNotIn("Dataset updated", text)
+                with patch("mayhem.tft_ui.data_timing", return_value="Timing") as timing:
+                    source_metadata(data, "augments")
+                meta = timing.call_args.args[0]
+                self.assertTrue(timing.call_args.kwargs["editorial"])
+                for key in ("data_date", "updated_scope", "fetched_at", "_fetched_at",
+                            "sample_start", "sample_end", "dateStats"):
+                    self.assertNotIn(key, meta)
+
+    def test_augment_timing_retains_its_own_editorial_edit_date(self):
+        data = copy.deepcopy(DATA)
+        data["updated_scope"] = "dataset"
+        data["view_meta"]["augments"]["updated"] = "2026-10-30T21:21:03.962Z"
+        text, _url = source_metadata(data, "augments")
+        self.assertEqual(text.split("\n", 1)[1], "Edited 2026-10-30 21:21 UTC")
+        self.assertNotIn("2026-10-25", text)
+        self.assertNotIn("Match dates", text)
+        self.assertNotIn("Dataset updated", text)
 
     def test_duplicate_names_require_a_specific_source_id_label(self):
         rows = [{"id": "Akali_AD", "name": "Akali"}, {"id": "Akali_AP", "name": "Akali"}]

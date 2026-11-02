@@ -209,6 +209,28 @@ class ArenaPanelTests(unittest.TestCase):
         self.assertIn("finish cutoff not specified", text)
         self.assertIn("Fetched 2026-10-28", text)
 
+    def test_timing_follows_displayed_snapshot_when_switching_champion_and_catalog(self):
+        catalog = {**copy.deepcopy(CATALOG), "data_date": "2026-10-30"}
+        data = {**copy.deepcopy(DATA), "data_date": "2026-10-28", "stale": True}
+        self.panel.set_catalog(catalog)
+        self.panel.handle_game(copy.deepcopy(LIVE))
+        self.panel.set_champion_data("157", data)
+        source = self.panel.source.get()
+        self.assertIn("CACHED", source.split("\n")[0])
+        self.assertIn("\nMatch dates not published · Updated 2026-10-28", source)
+        self.assertEqual(source.count("2026-10-28"), 1)
+        self.assertNotIn("2026-10-30", source)
+        with patch("mayhem.arena_ui.messagebox.showinfo") as dialog:
+            self.panel.about_rates()
+        self.assertIn("Match dates not published · Updated 2026-10-28", dialog.call_args.args[1])
+        self.panel.switch_view("champions")
+        self.assertIn("\nMatch dates not published · Updated 2026-10-30", self.panel.source.get())
+        self.assertNotIn("CACHED", self.panel.source.get())
+        self.assertNotIn("2026-10-28", self.panel.source.get())
+        self.panel.switch_view("augments")
+        self.assertIn("Updated 2026-10-28", self.panel.source.get())
+        self.assertIn("CACHED", self.panel.source.get())
+
     def test_unchanged_inactive_poll_does_not_reset_manual_table_selection(self):
         self.panel.set_catalog(copy.deepcopy(CATALOG))
         game = {"status": "waiting", "phase": "Lobby", "is_arena": False}

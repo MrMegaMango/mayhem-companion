@@ -7,6 +7,7 @@ from tkinter import ttk
 import webbrowser
 
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
+from .data_timing import data_timing
 VIEWS = (("comps", "Comps"), ("items", "Item builds"), ("augments", "Augments"))
 SORT_KEYS = {"Average place": "avg_place", "Top 4": "top4_rate",
              "1st place": "first_rate", "Games": "games"}
@@ -95,10 +96,15 @@ def resolve_choice(rows, label):
 
 def source_metadata(data, view):
     """Exact per-view metadata overrides shared catalog metadata."""
-    meta = {**data, **data.get("view_meta", {}).get(view, {})}
+    # Editorial guidance has its own source clock. Inherit only display
+    # context, never the statistics dataset's update, fetch or sample dates.
+    meta = ({key: data[key] for key in (
+        "source", "source_url", "patch", "version", "set", "queue", "mode",
+        "rank", "scope", "stale") if key in data}
+        if view == "augments" else dict(data))
+    meta.update(data.get("view_meta", {}).get(view, {}))
     pieces = [str(meta.get("source") or "TFT data")]
     patch = meta.get("patch") or meta.get("version")
-    date = meta.get("updated") or meta.get("data_date")
     if patch:
         pieces.append(f"Patch {patch}")
     elif meta.get("set"):
@@ -107,13 +113,11 @@ def source_metadata(data, view):
         pieces.append(str(meta.get("queue") or meta["mode"]))
     if meta.get("rank"):
         pieces.append(str(meta["rank"]))
-    if date:
-        pieces.append(str(date).replace("T", " ").replace("+00:00", " UTC"))
     if meta.get("scope") and meta["scope"] not in ("comp_archetype", "unit_three_item_build"):
         pieces.append(str(meta["scope"]))
     if meta.get("stale"):
         pieces.append("CACHED")
-    return " · ".join(pieces), meta.get("source_url")
+    return " · ".join(pieces) + "\n" + data_timing(meta, editorial=view == "augments"), meta.get("source_url")
 
 
 class TftPanel(tk.Frame):

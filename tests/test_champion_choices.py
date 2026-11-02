@@ -100,6 +100,24 @@ class PanelTests(unittest.TestCase):
         self.assertIn("Fewer than 200 games", self.panel.note.get())
         self.assertIn("No rate", self.panel.note.get())
 
+    def test_cached_timing_stays_with_visible_rates_until_context_changes(self):
+        self.panel.set_context([1, 2], 1, NAMES)
+        self.panel.set_data({**copy.deepcopy(DATA), "stale": True})
+        source = self.panel.source.get()
+        self.assertIn("CACHED", source.split("\n")[0])
+        self.assertIn("\nMatch dates not published · Updated 2026-10-25", source)
+        self.assertEqual(source.count("2026-10-25"), 1)
+        self.panel.set_loading()
+        self.assertEqual(self.panel.source.get(), source)
+        self.panel.set_context([2, 1], 2, NAMES)
+        self.assertEqual(self.panel.source.get(), source)
+        self.panel.set_context([3], 3, NAMES)
+        self.assertNotIn("2026-10-25", self.panel.source.get())
+        self.assertNotIn("CACHED", self.panel.source.get())
+        self.panel.set_data({**copy.deepcopy(DATA), "data_date": "2026-10-30"})
+        self.assertIn("Updated 2026-10-30", self.panel.source.get())
+        self.assertNotIn("CACHED", self.panel.source.get())
+
     def test_low_sample_leader_does_not_highlight_a_lower_rate(self):
         self.panel.set_context([1, 2, 3], 2, NAMES)
         self.panel.set_data(copy.deepcopy(DATA))

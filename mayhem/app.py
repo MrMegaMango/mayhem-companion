@@ -20,6 +20,7 @@ from PIL import Image, ImageTk
 from .windows import Hotkeys, set_window_style
 from .worker import Worker
 from .data import resolve_champion_id
+from .data_timing import data_timing
 from .displays import list_displays, select_display, place_panel
 from .tray import TrayIcon
 from .icons import IconLoader
@@ -278,7 +279,8 @@ class Companion:
         footer = tk.Frame(self.body, bg=BG)
         footer.pack(fill="x", side="bottom", pady=(0, 10))
         self.source = tk.StringVar(value="ARAMKit · champion-specific data")
-        link = self.label(footer, size=8, color=MUTED, textvariable=self.source, cursor="hand2", anchor="w")
+        link = self.label(footer, size=8, color=MUTED, textvariable=self.source,
+                          cursor="hand2", anchor="w", justify="left", wraplength=398)
         link.pack(fill="x")
         link.bind("<Button-1>", lambda _: self.open_source())
         more = self.button(footer, "More ▾", self.show_more, BG)
@@ -1005,7 +1007,9 @@ class Companion:
 
     def update_source(self, metadata):
         marker = " · cached/offline" if metadata.get("stale") else ""
-        self.source.set(f"ARAMKit · {metadata.get('version', '')} · {metadata.get('data_date', '')}{marker}")
+        source = metadata.get("source") or "ARAMKit"
+        patch = f" · Patch {metadata['version']}" if metadata.get("version") else ""
+        self.source.set(f"{source}{patch}{marker}\n{data_timing(metadata)}")
 
     def clear_offers(self):
         self.offer_ids = [None, None, None]
@@ -1190,8 +1194,7 @@ class Companion:
             self.champ_box["values"] = self.champion_names
             for card in self.cards:
                 card["box"]["values"] = self.augment_names
-            marker = " · cached/offline" if payload.get("stale") else ""
-            self.source.set(f"ARAMKit · {payload.get('version', '')} · {payload.get('data_date', '')}{marker}")
+            self.update_source(payload)
             self.status.set("Waiting for champion select. You can also browse a champion.")
             # Selection can arrive before the public catalog finishes.
             previous_spell_token, previous_build_token = self.spell_token, self.build_token

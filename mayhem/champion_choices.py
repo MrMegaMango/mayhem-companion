@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 import webbrowser
 
-
+from .data_timing import data_timing
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
 
@@ -185,11 +185,9 @@ class ChampionChoicesPanel(tk.Frame):
             pieces.append("All brackets" if data["bracket"] == "all" else "High bracket")
         if data.get("version"):
             pieces.append(f"Patch {data['version']}")
-        if data.get("data_date"):
-            pieces.append(str(data["data_date"]))
         if data.get("stale"):
             pieces.append("CACHED")
-        self.source.set(" · ".join(pieces))
+        self.source.set(" · ".join(pieces) + "\n" + data_timing(data))
         self.status.set("Cached rates" if data.get("stale") else "")
         self._render()
 
