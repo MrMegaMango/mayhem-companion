@@ -8,6 +8,7 @@ CATALOG = {
     "sword": {"name": "Draw Your Sword"},
     "basic": {"name": "Back To Basics"},
     "wind": {"name": "Windspeaker's Blessing"},
+    "3116": {"name": "Take'em Down Down Down"},
     "scoped": {"name": "Scoped Weapons"},
     "scopier": {"name": "Scopier Weapons"},
     "scopiest": {"name": "Scopiest Weapons"},
@@ -197,6 +198,64 @@ class WrappedTitleTests(unittest.TestCase):
                  self.fragment("Stats on", 100, 228),
                  self.fragment("Stats!", 100, 256)]
         self.assertEqual([item["id"] for item in match_augments(lines, CATALOG)], ["stats3"])
+
+    def test_real_repeated_word_title_preserves_all_words_across_two_lines(self):
+        for first, second in (("Take'em Down", "Down Down"),
+                              ("Take’em Down Down", "Down"),
+                              ("TAKE 'EM DOWN", "DOWN DOWN!")):
+            with self.subTest(first=first, second=second):
+                lines = [self.fragment(first, 100, 200, 200),
+                         self.fragment(second, 125, 228, 150)]
+                result = match_augments(lines, CATALOG)
+                self.assertEqual([item["id"] for item in result], ["3116"])
+                self.assertEqual(result[0]["name"], "Take'em Down Down Down")
+
+    def test_wrapped_title_tolerates_a_lost_apostrophe_or_one_ocr_character(self):
+        for first, second in (("Takeem Down", "Down Down"),
+                              ("Take'em Down", "Down D0wn")):
+            with self.subTest(first=first, second=second):
+                lines = [self.fragment(first, 100, 200, 200),
+                         self.fragment(second, 125, 228, 150)]
+                result = match_augments(lines, CATALOG)
+                self.assertEqual([item["id"] for item in result], ["3116"])
+                self.assertLess(result[0]["similarity"], 1)
+
+    def test_fuzzy_wrapped_title_keeps_its_position_in_three_card_choices(self):
+        lines = [line("Back To Basics", 900, 214),
+                 self.fragment("Down Down", 125, 228, 150),
+                 line("Draw Your Sword", 500, 214),
+                 self.fragment("Takeem Down", 100, 200, 200)]
+        self.assertEqual([item["id"] for item in detect_offers(lines, CATALOG)],
+                         ["3116", "sword", "basic"])
+
+    def test_fuzzy_longer_wrapped_name_consumes_its_exact_shorter_prefix(self):
+        lines = [self.fragment("Stats on Stats", 100, 200),
+                 self.fragment("on Stafs!", 100, 228)]
+        self.assertEqual([item["id"] for item in match_augments(lines, CATALOG)], ["stats3"])
+
+    def test_missing_repeated_word_does_not_guess_the_longer_augment(self):
+        lines = [self.fragment("Take'em Down", 100, 200, 200),
+                 self.fragment("Down", 125, 228, 150)]
+        self.assertEqual(match_augments(lines, CATALOG), [])
+
+    def test_fuzzy_wrapped_title_rejects_competing_near_names(self):
+        catalog = {**CATALOG, "ambiguous": {"name": "Take'em Down Dawn Down"}}
+        lines = [self.fragment("Takeem Down", 100, 200, 200),
+                 self.fragment("Down Down", 125, 228, 150)]
+        self.assertEqual(match_augments(lines, catalog), [])
+
+    def test_fuzzy_join_does_not_cross_cards_or_absorb_description_text(self):
+        cases = [
+            [self.fragment("Takeem Down", 100, 200, 200),
+             self.fragment("Down Down", 500, 228, 150)],
+            [self.fragment("Takeem Down", 100, 200, 200),
+             self.fragment("Down Down", 125, 228, 150, height=12)],
+            [self.fragment("Takeem Down", 100, 200, 200),
+             self.fragment("Down Down and gain power", 100, 228, 200)],
+        ]
+        for lines in cases:
+            with self.subTest(lines=lines):
+                self.assertEqual(match_augments(lines, CATALOG), [])
 
     def test_unrelated_adjacent_text_preserves_exact_original(self):
         lines = [self.fragment("Stats!", 100, 200),

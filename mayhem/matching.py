@@ -71,6 +71,23 @@ def _similarity(observed: str, target: str) -> float:
     return SequenceMatcher(None, observed, target, autojunk=False).ratio()
 
 
+def _best_title_match(observed: str, entries: list[tuple[Any, str, list[str]]],
+                      threshold: float) -> tuple[float, Any, str] | None:
+    """Apply the same whole-title confidence and ambiguity rules everywhere."""
+    if not observed or len(observed) > 100:
+        return None
+    scores = [(max((_similarity(observed, variant) for variant in variants), default=0.0), identifier, name)
+              for identifier, name, variants in entries]
+    scores.sort(key=lambda item: item[0], reverse=True)
+    if not scores or scores[0][0] < threshold:
+        return None
+    score = scores[0][0]
+    if len(scores) > 1 and (scores[1][0] == score or
+                          (score < 1 and score - scores[1][0] < 0.055)):
+        return None
+    return scores[0]
+
+
 def _horizontal_alignment(upper: Mapping[str, Any], lower: Mapping[str, Any]) -> bool:
     """Require substantial overlap within one card, allowing centered titles."""
     if any(line.get(key) is None or line[key] <= 0
@@ -100,13 +117,15 @@ def _can_wrap(upper: Mapping[str, Any], lower: Mapping[str, Any]) -> bool:
     return lower["y"] > upper["y"] and -tall * 0.12 <= gap <= tall * 0.65
 
 
-def _joined_title_lines(lines: list[dict[str, Any]], entries: list[tuple[Any, str, list[str]]]) -> list[dict[str, Any]]:
-    """Join up to three adjacent title fragments only into known exact names.
+def _joined_title_lines(lines: list[dict[str, Any]], entries: list[tuple[Any, str, list[str]]],
+                        *, threshold: float) -> list[dict[str, Any]]:
+    """Join up to three adjacent fragments into a confident catalog title.
 
     A confirmed longer title consumes its fragments, so a wrapped "Stats on
     Stats!" does not also produce "Stats!". Unrelated complete titles retain
-    their normal exact/fuzzy matching behavior. Geometry uses ratios, working
-    with both pixels and normalized coordinates.
+    their normal exact/fuzzy matching behavior. Fuzzy joins require a higher
+    confidence than single lines and the same unique-candidate margin.
+    Geometry uses ratios, working with both pixels and normalized coordinates.
     """
     known: dict[str, set[Any]] = {}
     for identifier, _, variants in entries:
@@ -135,7 +154,12 @@ def _joined_title_lines(lines: list[dict[str, Any]], entries: list[tuple[Any, st
             chain.append(candidates[0])
             pieces = [lines[part] for part in chain]
             text = " ".join(piece["text"].strip() for piece in pieces)
-            if len(known.get(normalize_title(text), ())) != 1:
+            observed = normalize_title(text)
+            exact = known.get(observed, ())
+            if exact:
+                if len(exact) != 1:
+                    continue
+            elif _best_title_match(observed, entries, max(0.93, threshold)) is None:
                 continue
             left = min(piece["x"] for piece in pieces)
             top = min(piece["y"] for piece in pieces)
@@ -169,21 +193,12 @@ def _match_candidates(lines: Iterable[Any], catalog: Mapping[Any, Any], *, thres
     entries = _catalog_entries(catalog)
     prepared = [parsed for raw_line in lines if (parsed := _line(raw_line)) is not None]
     candidates = []
-    for order, line in enumerate(_joined_title_lines(prepared, entries)):
+    for order, line in enumerate(_joined_title_lines(prepared, entries, threshold=threshold)):
         observed = normalize_title(line["text"])
-        if not observed or len(observed) > 100:
+        match = _best_title_match(observed, entries, threshold)
+        if match is None:
             continue
-        scores = [(max((_similarity(observed, variant) for variant in variants), default=0.0), identifier, name)
-                  for identifier, name, variants in entries]
-        scores.sort(key=lambda item: item[0], reverse=True)
-        if not scores or scores[0][0] < threshold:
-            continue
-        score, identifier, name = scores[0]
-        # Exact unique matches are reliable. Similar competing titles require
-        # a sufficient margin; never guess between Scoped/Scopier/Scopiest.
-        if len(scores) > 1 and (scores[1][0] == score or
-                              (score < 1 and score - scores[1][0] < 0.055)):
-            continue
+        score, identifier, name = match
         candidates.append({"id": identifier, "name": name, "similarity": round(score, 4),
                            "x": line["x"], "y": line["y"], "width": line["width"],
                            "height": line["height"], "_order": order})
