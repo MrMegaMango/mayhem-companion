@@ -7,7 +7,7 @@ from tkinter import messagebox, ttk
 import webbrowser
 
 from .data import resolve_champion_id
-from .data_timing import data_timing
+from .data_timing import data_freshness, data_period, data_period_details
 
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
@@ -84,6 +84,8 @@ class ArenaPanel(tk.Frame):
         self.sort = tk.StringVar(value="Win rate")
         self.message = tk.StringVar(value="Loading Arena data…")
         self.source = tk.StringVar(value="Arena")
+        self.period = tk.StringVar()
+        self.period_metadata = None
         self.detail = tk.StringVar()
         self.variant = tk.StringVar()
         row = tk.Frame(self, bg=BG)
@@ -100,6 +102,11 @@ class ArenaPanel(tk.Frame):
         for key, title in (("champions", "Champions"), ("augments", "Augments"), ("items", "Items")):
             self.tabs[key] = self.button(tabs, title, lambda key=key: self.switch_view(key))
             self.tabs[key].pack(side="left", expand=True, fill="x", padx=1)
+        self.period_host = tk.Frame(self, bg=BG)
+        self.period_host.pack(fill="x")
+        self.period_label = self.label(self.period_host, textvariable=self.period, size=10, color=TEXT,
+                                       anchor="w", justify="left", wraplength=395, cursor="hand2")
+        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         controls = tk.Frame(self, bg=BG)
         self.controls = controls
         controls.pack(fill="x", pady=(0, 8))
@@ -332,15 +339,29 @@ class ArenaPanel(tk.Frame):
                 bits.append(str(data[key]))
         if data.get("stale"):
             bits.append("CACHED")
-        self.source.set(" · ".join(bits) + "\n" + data_timing(data))
+        freshness = data_freshness(data)
+        self.source.set(" · ".join(bits) + ("\n" + freshness if freshness else ""))
+        displayed = self.catalog if self.view.get() == "champions" else self.data
+        self.set_period(displayed)
         self.source_url = data.get("source_url")
         self.tree.heading("win", text=label)
         return label
 
+    def set_period(self, metadata):
+        self.period_metadata = metadata
+        self.period.set(data_period(metadata) if metadata else "")
+        self.period_label.pack_forget()
+        if metadata:
+            self.period_label.pack(fill="x", pady=(0, 8))
+
+    def show_period_details(self):
+        if self.period_metadata:
+            messagebox.showinfo("Data period", data_period_details(self.period_metadata), parent=self.winfo_toplevel())
+
     def about_rates(self):
         data = self.current_metadata()
         details = [str(data.get("rate_note") or "Rates describe the Arena source's match sample."),
-                   data_timing(data)]
+                   data_period_details(data)]
         if data.get("sample_label"):
             details.append(str(data["sample_label"]))
         if (self.catalog or {}).get("catalog_note"):

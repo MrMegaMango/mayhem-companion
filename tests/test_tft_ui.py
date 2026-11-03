@@ -64,7 +64,7 @@ class DataPresentationTests(unittest.TestCase):
         text, _url = source_metadata(data, "comps")
         context, timing = text.split("\n", 1)
         self.assertNotIn("2026-11-01", context)
-        self.assertEqual(timing, "Match dates not published · Dataset updated 2026-11-01 20:00 UTC")
+        self.assertEqual(timing, "Dataset updated 2026-11-01 20:00 UTC")
 
     def test_augment_timing_never_inherits_statistical_update_or_sample_dates(self):
         data = {**DATA, "updated": "2026-11-01T20:00:00Z", "data_date": "2026-11-01",
@@ -75,11 +75,11 @@ class DataPresentationTests(unittest.TestCase):
             with self.subTest(view_meta=view_meta):
                 data["view_meta"] = view_meta
                 text, _url = source_metadata(data, "augments")
-                self.assertIn("Update date not published", text)
+                self.assertNotIn("Update date", text)
                 self.assertNotIn("2026-", text)
                 self.assertNotIn("Match dates", text)
                 self.assertNotIn("Dataset updated", text)
-                with patch("mayhem.tft_ui.data_timing", return_value="Timing") as timing:
+                with patch("mayhem.tft_ui.data_freshness", return_value="Timing") as timing:
                     source_metadata(data, "augments")
                 meta = timing.call_args.args[0]
                 self.assertTrue(timing.call_args.kwargs["editorial"])
@@ -151,6 +151,27 @@ class PanelTests(unittest.TestCase):
         self.panel.render_list()
         self.assertNotIn("4.10", self.texts())
         self.assertIn("No matching", self.texts())
+
+    def test_period_tracks_each_view_and_clears_during_item_loading_and_editing(self):
+        data = {**copy.deepcopy(DATA), "sample_start": "2026-10-21", "sample_end": "2026-10-25"}
+        builds = {**copy.deepcopy(BUILDS), "sample_start": "2026-10-22", "sample_end": "2026-10-24"}
+        self.panel.set_data(data)
+        self.assertEqual(self.panel.period.get(), "Matches 2026-10-21 – 2026-10-25")
+        self.panel.switch_view("items")
+        self.assertEqual(self.panel.period.get(), "")
+        self.panel.set_items("unit-a", builds)
+        self.assertEqual(self.panel.period.get(), "Matches 2026-10-22 – 2026-10-24")
+        self.panel.unit_choice.set("Bar")
+        self.panel._unit_edited(Mock(keysym="r"))
+        self.assertEqual(self.panel.period.get(), "")
+        self.panel.switch_view("augments")
+        self.assertEqual(self.panel.period.get(), "Expert guidance · no match sample")
+        self.assertNotIn("sample_start", self.panel.period_metadata)
+        with patch("mayhem.tft_ui.messagebox.showinfo") as dialog:
+            self.panel.show_period_details()
+        self.assertNotIn("2026-10-21", dialog.call_args.args[1])
+        self.panel.switch_view("comps")
+        self.assertEqual(self.panel.period.get(), "Matches 2026-10-21 – 2026-10-25")
 
     def test_item_tab_fetches_only_selected_unit_and_never_reuses_unit_overall_rates(self):
         self.panel.set_data(copy.deepcopy(DATA))

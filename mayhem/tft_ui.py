@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import math
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 import webbrowser
 
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
-from .data_timing import data_timing
+from .data_timing import data_freshness, data_period, data_period_details
 VIEWS = (("comps", "Comps"), ("items", "Item builds"), ("augments", "Augments"))
 SORT_KEYS = {"Average place": "avg_place", "Top 4": "top4_rate",
              "1st place": "first_rate", "Games": "games"}
@@ -94,7 +94,7 @@ def resolve_choice(rows, label):
     return matches[0] if len(matches) == 1 else None
 
 
-def source_metadata(data, view):
+def _view_metadata(data, view):
     """Exact per-view metadata overrides shared catalog metadata."""
     # Editorial guidance has its own source clock. Inherit only display
     # context, never the statistics dataset's update, fetch or sample dates.
@@ -103,6 +103,11 @@ def source_metadata(data, view):
         "rank", "scope", "stale") if key in data}
         if view == "augments" else dict(data))
     meta.update(data.get("view_meta", {}).get(view, {}))
+    return meta
+
+
+def source_metadata(data, view):
+    meta = _view_metadata(data, view)
     pieces = [str(meta.get("source") or "TFT data")]
     patch = meta.get("patch") or meta.get("version")
     if patch:
@@ -117,7 +122,8 @@ def source_metadata(data, view):
         pieces.append(str(meta["scope"]))
     if meta.get("stale"):
         pieces.append("CACHED")
-    return " · ".join(pieces) + "\n" + data_timing(meta, editorial=view == "augments"), meta.get("source_url")
+    freshness = data_freshness(meta, editorial=view == "augments")
+    return " · ".join(pieces) + ("\n" + freshness if freshness else ""), meta.get("source_url")
 
 
 class TftPanel(tk.Frame):
@@ -146,6 +152,9 @@ class TftPanel(tk.Frame):
         self.sort = tk.StringVar(value="Games")
         self.message = tk.StringVar(value="Loading TFT data…")
         self.source = tk.StringVar(value="TFT · loading source")
+        self.period = tk.StringVar()
+        self.period_metadata = None
+        self.period_editorial = False
         self._build()
 
     @staticmethod
@@ -169,6 +178,11 @@ class TftPanel(tk.Frame):
             button.configure(fg=ACCENT if key == "comps" else MUTED)
             button.pack(side="left", fill="x", expand=True, padx=1)
             self.tabs[key] = button
+        self.period_host = tk.Frame(self, bg=BG)
+        self.period_host.pack(fill="x")
+        self.period_label = self.label(self.period_host, textvariable=self.period, size=10, color=TEXT,
+                                       anchor="w", justify="left", wraplength=390, cursor="hand2")
+        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         self.unit_frame = tk.Frame(self, bg=BG)
         self.label(self.unit_frame, "Unit", 10, MUTED).pack(side="left", padx=(0, 8))
         self.unit_box = ttk.Combobox(self.unit_frame, textvariable=self.unit_choice,
@@ -298,8 +312,22 @@ class TftPanel(tk.Frame):
     def set_error(self, text):
         self.message.set(str(text))
         if self.data is None:
+            self.set_period(None)
             self.result_count.configure(text="Data unavailable")
             self._empty_detail("TFT data could not be loaded. Use Refresh to try again.")
+
+    def set_period(self, metadata, *, editorial=False):
+        self.period_metadata = metadata
+        self.period_editorial = editorial
+        self.period.set(data_period(metadata, editorial=editorial) if metadata else "")
+        self.period_label.pack_forget()
+        if metadata:
+            self.period_label.pack(fill="x", pady=(0, 8))
+
+    def show_period_details(self):
+        if self.period_metadata:
+            messagebox.showinfo("Data period", data_period_details(
+                self.period_metadata, editorial=self.period_editorial), parent=self.winfo_toplevel())
 
     def set_data(self, data):
         self.data = data
@@ -324,6 +352,7 @@ class TftPanel(tk.Frame):
         if self.view.get() == "items":
             self.message.set(str(text))
             if self.item_data is None:
+                self.set_period(None)
                 self._empty_detail("Item builds could not be loaded. Use Refresh to try again.")
 
     def _select_unit(self, _event=None):
@@ -352,6 +381,9 @@ class TftPanel(tk.Frame):
         self.item_data = None
         self.item_loading = False
         self.rows = []
+        self.set_period(None)
+        self.source.set("TFT · select a unit")
+        self.source_url = None
         self.render_list()
         self._empty_detail("Select a unit to load its three-item builds.")
 
@@ -411,6 +443,9 @@ class TftPanel(tk.Frame):
             box.configure(values=names)
         metadata, self.source_url = source_metadata(active_data, view)
         self.source.set(metadata)
+        displayed = self.item_data if view == "items" else self.data
+        self.set_period(_view_metadata(displayed, view) if displayed and self.rows else None,
+                        editorial=view == "augments")
         self._layout_compare()
         self.render_list()
         if view == "items" and self.item_loading:

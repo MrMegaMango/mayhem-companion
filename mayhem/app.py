@@ -12,7 +12,7 @@ import queue
 import re
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 import webbrowser
 
 from PIL import Image, ImageTk
@@ -20,7 +20,7 @@ from PIL import Image, ImageTk
 from .windows import Hotkeys, set_window_style
 from .worker import Worker
 from .data import resolve_champion_id
-from .data_timing import data_timing
+from .data_timing import data_freshness, data_period, data_period_details
 from .displays import list_displays, select_display, place_panel
 from .tray import TrayIcon
 from .icons import IconLoader
@@ -212,6 +212,13 @@ class Companion:
         self.builds_tab.pack(side="left", fill="x", expand=True)
         self.spells_tab = self.button(tabs, "Spells", lambda: self.switch_view("spells"), PANEL)
         self.spells_tab.pack(side="left", fill="x", expand=True)
+        self.period = tk.StringVar()
+        self.period_metadata = None
+        self.period_host = tk.Frame(self.body, bg=BG)
+        self.period_host.pack(fill="x")
+        self.period_label = self.label(self.period_host, size=10, color=TEXT, textvariable=self.period,
+                                       anchor="w", justify="left", wraplength=398, cursor="hand2")
+        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         self.pages = tk.Frame(self.body, bg=BG)
         self.pages.pack(fill="both", expand=True)
         self.augment_panel = tk.Frame(self.pages, bg=BG)
@@ -515,6 +522,8 @@ class Companion:
             self.edit_augment(index, False)
 
     def lookup(self):
+        if self.view.get() == "augments":
+            self.set_period(None)
         self.reset_augment_emphasis()
         self.lookup_spells()
         self.lookup_builds()
@@ -735,6 +744,7 @@ class Companion:
         self.build_note.set("")
         self.build_summary.set("Loading core builds…" if self.champion else "Choose a champion to see core builds.")
         if self.view.get() == "builds":
+            self.set_period(None)
             self.source.set("ARAMKit · core-build data")
             self.root.after_idle(self.fit_window)
         if self.champion:
@@ -771,6 +781,7 @@ class Companion:
                             else "Browsing builds for the selected champion")
         if self.build_data is None:
             if self.view.get() == "builds":
+                self.set_period(None)
                 self.source.set("ARAMKit · core-build data")
             return
         groups = [group for group in self.build_data["groups"] if group["rows"]]
@@ -954,6 +965,8 @@ class Companion:
         self.spell_token += 1
         self.spell_champion = self.champion
         self.spell_data = None
+        if self.view.get() == "spells":
+            self.set_period(None)
         self.spell_tree.delete(*self.spell_tree.get_children())
         self.spell_note.set("")
         self.spell_summary.set("Loading spell pairs…" if self.champion else "Choose a champion to see spell-pair win rates.")
@@ -964,6 +977,8 @@ class Companion:
         self.spell_tree.delete(*self.spell_tree.get_children())
         self.update_spell_status()
         if self.spell_data is None:
+            if self.view.get() == "spells":
+                self.set_period(None)
             self.spell_tree.configure(height=1)
             self.root.after_idle(self.fit_window)
             return
@@ -973,7 +988,8 @@ class Companion:
         if not rows:
             self.spell_summary.set("No spell-pair data for this champion.")
             self.spell_note.set("")
-            self.update_source(self.spell_data)
+            if self.view.get() == "spells":
+                self.set_period(None)
             return
         sort_key = {"Win rate": "win_rate", "Games": "sample_count", "Pick rate": "pick_rate"}[self.spell_sort.get()]
         rows.sort(key=lambda row: (row.get(sort_key) if row.get(sort_key) is not None else -1,
@@ -1004,7 +1020,8 @@ class Companion:
         if self.spell_data.get("stale"):
             notes.append("Cached data")
         self.spell_note.set(" · ".join(notes))
-        self.update_source(self.spell_data)
+        if self.view.get() == "spells":
+            self.update_source(self.spell_data)
 
     def update_spell_status(self):
         if not self.champion:
@@ -1017,11 +1034,24 @@ class Companion:
         else:
             self.status.set("Browsing spell pairs for the selected champion")
 
+    def set_period(self, metadata):
+        self.period_metadata = metadata
+        self.period.set(data_period(metadata) if metadata else "")
+        self.period_label.pack_forget()
+        if metadata:
+            self.period_label.pack(fill="x", pady=(0, 8))
+
+    def show_period_details(self):
+        if self.period_metadata:
+            messagebox.showinfo("Data period", data_period_details(self.period_metadata), parent=self.root)
+
     def update_source(self, metadata):
         marker = " · cached/offline" if metadata.get("stale") else ""
         source = metadata.get("source") or "ARAMKit"
         patch = f" · Patch {metadata['version']}" if metadata.get("version") else ""
-        self.source.set(f"{source}{patch}{marker}\n{data_timing(metadata)}")
+        freshness = data_freshness(metadata)
+        self.source.set(f"{source}{patch}{marker}" + (f"\n{freshness}" if freshness else ""))
+        self.set_period(metadata)
 
     def clear_offers(self):
         self.offer_ids = [None, None, None]
@@ -1206,7 +1236,10 @@ class Companion:
             self.champ_box["values"] = self.champion_names
             for card in self.cards:
                 card["box"]["values"] = self.augment_names
-            self.update_source(payload)
+            # Catalog freshness must not replace a currently displayed
+            # champion snapshot's period. Its lookups set their own metadata.
+            if self.period_metadata is None:
+                self.source.set(str(payload.get("source") or "ARAMKit"))
             self.status.set("Waiting for champion select. You can also browse a champion.")
             # Selection can arrive before the public catalog finishes.
             previous_spell_token, previous_build_token = self.spell_token, self.build_token
@@ -1310,6 +1343,8 @@ class Companion:
             token, error = payload
             if token == self.spell_token:
                 self.spell_data = None
+                if self.view.get() == "spells":
+                    self.set_period(None)
                 self.spell_summary.set("Spell data unavailable. Use Retry data.")
                 self.spell_note.set(str(error)[:80])
         elif kind == "builds":
@@ -1322,6 +1357,8 @@ class Companion:
             token, error = payload
             if token == self.build_token:
                 self.build_data = None
+                if self.view.get() == "builds":
+                    self.set_period(None)
                 for card in self.build_cards:
                     card["frame"].pack_forget()
                 self.build_summary.set("Build data unavailable. Use Retry data.")
@@ -1331,6 +1368,8 @@ class Companion:
         elif kind == "lookup_error":
             token, error = payload
             if token == self.token:
+                if self.view.get() == "augments":
+                    self.set_period(None)
                 for card in self.cards:
                     card["value"].configure(text="—", fg=TEXT)
                     card["meta"].configure(text="Data unavailable", fg=AMBER)
@@ -1448,8 +1487,11 @@ class Companion:
                     and rate.get("sample_count", 0)]
         highest = max((rate["win_rate"] for rate in observed), default=None)
         metadata = next((rate for rate in rates if rate), None)
-        if metadata and self.view.get() == "augments":
-            self.update_source(metadata)
+        if self.view.get() == "augments":
+            if metadata:
+                self.update_source(metadata)
+            else:
+                self.set_period(None)
         for rate, card in zip(rates, self.cards):
             if not rate:
                 continue

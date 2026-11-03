@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from mayhem.arena_ui import ArenaPanel, champion_rows, formatted, ordered_rows
+from mayhem.data_timing import data_period
 
 
 CATALOG = {
@@ -217,19 +218,37 @@ class ArenaPanelTests(unittest.TestCase):
         self.panel.set_champion_data("157", data)
         source = self.panel.source.get()
         self.assertIn("CACHED", source.split("\n")[0])
-        self.assertIn("\nMatch dates not published · Updated 2026-10-28", source)
+        self.assertIn("\nUpdated 2026-10-28", source)
+        self.assertEqual(self.panel.period.get(), data_period(data))
+        self.assertIs(self.panel.period_metadata, data)
         self.assertEqual(source.count("2026-10-28"), 1)
         self.assertNotIn("2026-10-30", source)
         with patch("mayhem.arena_ui.messagebox.showinfo") as dialog:
             self.panel.about_rates()
-        self.assertIn("Match dates not published · Updated 2026-10-28", dialog.call_args.args[1])
+        self.assertIn("2026-10-28", dialog.call_args.args[1])
         self.panel.switch_view("champions")
-        self.assertIn("\nMatch dates not published · Updated 2026-10-30", self.panel.source.get())
+        self.assertIn("\nUpdated 2026-10-30", self.panel.source.get())
+        self.assertEqual(self.panel.period.get(), data_period(catalog))
+        self.assertIs(self.panel.period_metadata, catalog)
         self.assertNotIn("CACHED", self.panel.source.get())
         self.assertNotIn("2026-10-28", self.panel.source.get())
         self.panel.switch_view("augments")
         self.assertIn("Updated 2026-10-28", self.panel.source.get())
         self.assertIn("CACHED", self.panel.source.get())
+
+    def test_champion_loading_never_uses_catalog_period_for_absent_item_rows(self):
+        self.panel.set_catalog({**copy.deepcopy(CATALOG), "sample_start": "2026-10-21", "sample_end": "2026-10-30"})
+        self.assertIn("2026-10-21", self.panel.period.get())
+        self.panel.handle_game(copy.deepcopy(LIVE))
+        self.panel.switch_view("items")
+        self.assertEqual(self.panel.period.get(), "")
+        self.assertIsNone(self.panel.period_metadata)
+        self.panel.set_champion_data("157", {**copy.deepcopy(DATA), "sample_start": "2026-10-23", "sample_end": "2026-10-28"})
+        self.assertIn("2026-10-23", self.panel.period.get())
+        with patch("mayhem.arena_ui.messagebox.showinfo") as dialog:
+            self.panel.show_period_details()
+        self.assertIn("2026-10-28", dialog.call_args.args[1])
+        self.assertNotIn("2026-10-30", dialog.call_args.args[1])
 
     def test_unchanged_inactive_poll_does_not_reset_manual_table_selection(self):
         self.panel.set_catalog(copy.deepcopy(CATALOG))

@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, call, patch
 
 from mayhem.app import Companion
+from mayhem.data_timing import data_period
 from mayhem.theme import ACCENT, BORDER, MUTED, TEXT
 
 
@@ -26,6 +27,8 @@ class StateTests(unittest.TestCase):
         app.storage = Path("C:/Users/fixture/MayhemCompanion")
         app.champ_var, app.badge, app.stage = Mock(), Mock(), Mock()
         app.status, app.source, app.root = Mock(), Mock(), Mock()
+        app.period, app.period_label = Mock(), Mock()
+        app.period_metadata = None
         app.follow = True
         app.champion = "157"
         app.live_champion = "157"
@@ -114,9 +117,30 @@ class StateTests(unittest.TestCase):
         text = app.source.set.call_args.args[0]
         self.assertIn("Patch 16.21", text)
         self.assertIn("cached/offline", text)
-        self.assertIn("Match dates not published", text)
+        self.assertNotIn("Match dates", text)
+        self.assertEqual(app.period.set.call_args.args[0], data_period(app.period_metadata))
+        self.assertEqual(app.period_metadata["data_date"], "2026-10-30")
         self.assertIn("Updated 2026-10-30", text)
         self.assertNotIn("2026-11-04", text)
+
+    def test_background_spell_render_cannot_replace_visible_augment_period(self):
+        app = self.make_view()
+        snapshot = {"source": "ARAMKit", "version": "16.21", "data_date": "2026-10-30"}
+        app.update_source(snapshot)
+        app.spell_data = {"rows": [], "data_date": "2026-11-01"}
+        app.render_spells()
+        self.assertIs(app.period_metadata, snapshot)
+        app.spell_data = None
+        app.render_spells()
+        self.assertIs(app.period_metadata, snapshot)
+
+    def test_loading_replaced_augment_cards_clears_period(self):
+        app = self.make_view()
+        app.update_source({"source": "ARAMKit", "data_date": "2026-10-30"})
+        app.stage.get.return_value = "All picks"
+        app.lookup()
+        self.assertIsNone(app.period_metadata)
+        app.period_label.pack_forget.assert_called()
 
     def test_game_updates_resolve_locally_without_http(self):
         app = self.make_view()

@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from mayhem.champion_choices import ChampionChoicesPanel, display_metrics, ordered_rows
+from mayhem.data_timing import data_period
 
 
 NAMES = {"1": {"name": "Annie", "icon_url": "https://example.test/annie.webp"},
@@ -105,13 +106,17 @@ class PanelTests(unittest.TestCase):
         self.panel.set_data({**copy.deepcopy(DATA), "stale": True})
         source = self.panel.source.get()
         self.assertIn("CACHED", source.split("\n")[0])
-        self.assertIn("\nMatch dates not published · Updated 2026-10-25", source)
+        self.assertIn("\nUpdated 2026-10-25", source)
+        period = self.panel.period.get()
+        self.assertEqual(period, data_period(self.panel.data))
         self.assertEqual(source.count("2026-10-25"), 1)
         self.panel.set_loading()
         self.assertEqual(self.panel.source.get(), source)
+        self.assertEqual(self.panel.period.get(), period)
         self.panel.set_context([2, 1], 2, NAMES)
         self.assertEqual(self.panel.source.get(), source)
         self.panel.set_context([3], 3, NAMES)
+        self.assertEqual(self.panel.period.get(), "")
         self.assertNotIn("2026-10-25", self.panel.source.get())
         self.assertNotIn("CACHED", self.panel.source.get())
         self.panel.set_data({**copy.deepcopy(DATA), "data_date": "2026-10-30"})

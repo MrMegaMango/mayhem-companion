@@ -270,7 +270,7 @@ def preview_class():
 
         def smoke_ui(self):
             """Invoke native callbacks directly; never inject input events."""
-            report = {"checks": [], "views": {}, "errors": []}
+            report = {"checks": [], "views": {}, "periods": {}, "errors": []}
             callback_errors = []
             self.root.report_callback_exception = lambda kind, value, tb: callback_errors.append(str(value))
             original_height = self.options.max_height
@@ -324,6 +324,11 @@ def preview_class():
                     assert card["items"][0]["name"].cget("text") == row["item_names"][0], "Build ranking omitted a source archetype"
                     assert "% of" not in card["meta"].cget("text"), "Initial build shows an archetype-specific pick rate"
                 report["checks"].append("global core-build win-rate order, no category filter, comparable sort choices")
+                assert self.period_label.winfo_manager(), "Build period is hidden"
+                assert "Oct 21" in self.period.get(), "Cached patch period has no start date"
+                period_bottom = self.period_label.winfo_rooty() + self.period_label.winfo_height()
+                assert period_bottom <= self.pages.winfo_rooty(), "Period must be above the results"
+                report["checks"].append("visible date range above build results")
                 assert self.root.winfo_height() <= 700, "Build window exceeds 700px"
                 for widget in (self.more_button, self.build_note_label):
                     bottom = widget.winfo_rooty() - self.root.winfo_rooty() + widget.winfo_height()
@@ -345,6 +350,8 @@ def preview_class():
                     assert panel.winfo_manager(), f"{view} panel not displayed"
                     assert self.badge.cget("text") == "EXAMPLE"
                     report["views"][view] = self.root.geometry()
+                    period_owner = self.arena_panel if view == "arena" else self.tft_panel if view.startswith("tft") else self
+                    report["periods"][view] = period_owner.period.get()
                 report["checks"].append("all eight cached view transitions")
                 assert not callback_errors, "; ".join(callback_errors)
             except Exception as error:
