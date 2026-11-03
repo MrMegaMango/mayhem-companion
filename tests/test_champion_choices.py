@@ -106,10 +106,10 @@ class PanelTests(unittest.TestCase):
         self.panel.set_data({**copy.deepcopy(DATA), "stale": True})
         source = self.panel.source.get()
         self.assertIn("CACHED", source.split("\n")[0])
-        self.assertIn("\nUpdated 2026-10-25", source)
+        self.assertNotIn("Updated", source)
         period = self.panel.period.get()
         self.assertEqual(period, data_period(self.panel.data))
-        self.assertEqual(source.count("2026-10-25"), 1)
+        self.assertEqual(period.count("Oct 25, 2026"), 1)
         self.panel.set_loading()
         self.assertEqual(self.panel.source.get(), source)
         self.assertEqual(self.panel.period.get(), period)
@@ -120,7 +120,7 @@ class PanelTests(unittest.TestCase):
         self.assertNotIn("2026-10-25", self.panel.source.get())
         self.assertNotIn("CACHED", self.panel.source.get())
         self.panel.set_data({**copy.deepcopy(DATA), "data_date": "2026-10-30"})
-        self.assertIn("Updated 2026-10-30", self.panel.source.get())
+        self.assertIn("Oct 30, 2026", self.panel.period.get())
         self.assertNotIn("CACHED", self.panel.source.get())
 
     def test_low_sample_leader_does_not_highlight_a_lower_rate(self):

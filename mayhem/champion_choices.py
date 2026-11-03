@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import webbrowser
 
-from .data_timing import data_freshness, data_period, data_period_details
+from .data_timing import data_period, data_period_details
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
 
@@ -89,11 +89,6 @@ class ChampionChoicesPanel(tk.Frame):
         heading.pack(fill="x", pady=(2, 9))
         self._label(heading, self.title, TEXT, 11, bold=True, anchor="w").pack(side="left")
         self._label(heading, self.status, MUTED, 8, anchor="e").pack(side="right")
-        self.period_host = tk.Frame(self, bg=BG)
-        self.period_host.pack(fill="x")
-        self.period_label = self._label(self.period_host, self.period, TEXT, 10, anchor="w",
-                                        justify="left", wraplength=398, cursor="hand2")
-        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         style = ttk.Style(self)
         style.configure("Choices.Treeview", background=PANEL, fieldbackground=PANEL,
                         foreground=TEXT, rowheight=48, borderwidth=0, font=("Segoe UI", 11))
@@ -123,6 +118,11 @@ class ChampionChoicesPanel(tk.Frame):
                                         wraplength=398, cursor="hand2")
         self.source_label.pack(fill="x", pady=(8, 0))
         self.source_label.bind("<Button-1>", lambda _: self.open_source())
+        self.period_host = tk.Frame(self, bg=BG)
+        self.period_host.pack(fill="x")
+        self.period_label = self._label(self.period_host, self.period, MUTED, 8, anchor="w",
+                                        justify="left", wraplength=398, cursor="hand2")
+        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         self.note_label = self._label(self, self.note, anchor="w", justify="left", wraplength=398)
 
     def _schedule(self, callback):
@@ -195,8 +195,7 @@ class ChampionChoicesPanel(tk.Frame):
             pieces.append(f"Patch {data['version']}")
         if data.get("stale"):
             pieces.append("CACHED")
-        freshness = data_freshness(data)
-        self.source.set(" · ".join(pieces) + ("\n" + freshness if freshness else ""))
+        self.source.set(" · ".join(pieces))
         self.set_period(data if incoming else None)
         self.status.set("Cached rates" if data.get("stale") else "")
         self._render()
@@ -214,7 +213,7 @@ class ChampionChoicesPanel(tk.Frame):
         self.period.set(data_period(metadata) if metadata else "")
         self.period_label.pack_forget()
         if metadata:
-            self.period_label.pack(fill="x", pady=(0, 8))
+            self.period_label.pack(fill="x")
 
     def show_period_details(self):
         if self.period_metadata:

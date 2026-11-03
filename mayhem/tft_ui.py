@@ -7,7 +7,7 @@ from tkinter import messagebox, ttk
 import webbrowser
 
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
-from .data_timing import data_freshness, data_period, data_period_details
+from .data_timing import data_period, data_period_details
 VIEWS = (("comps", "Comps"), ("items", "Item builds"), ("augments", "Augments"))
 SORT_KEYS = {"Average place": "avg_place", "Top 4": "top4_rate",
              "1st place": "first_rate", "Games": "games"}
@@ -122,8 +122,7 @@ def source_metadata(data, view):
         pieces.append(str(meta["scope"]))
     if meta.get("stale"):
         pieces.append("CACHED")
-    freshness = data_freshness(meta, editorial=view == "augments")
-    return " · ".join(pieces) + ("\n" + freshness if freshness else ""), meta.get("source_url")
+    return " · ".join(pieces), meta.get("source_url")
 
 
 class TftPanel(tk.Frame):
@@ -178,11 +177,6 @@ class TftPanel(tk.Frame):
             button.configure(fg=ACCENT if key == "comps" else MUTED)
             button.pack(side="left", fill="x", expand=True, padx=1)
             self.tabs[key] = button
-        self.period_host = tk.Frame(self, bg=BG)
-        self.period_host.pack(fill="x")
-        self.period_label = self.label(self.period_host, textvariable=self.period, size=10, color=TEXT,
-                                       anchor="w", justify="left", wraplength=390, cursor="hand2")
-        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         self.unit_frame = tk.Frame(self, bg=BG)
         self.label(self.unit_frame, "Unit", 10, MUTED).pack(side="left", padx=(0, 8))
         self.unit_box = ttk.Combobox(self.unit_frame, textvariable=self.unit_choice,
@@ -266,10 +260,13 @@ class TftPanel(tk.Frame):
         self.label(status, textvariable=self.message, size=9, color=MUTED,
                    wraplength=295, justify="left", anchor="w").pack(side="left", fill="x", expand=True)
         self.button(status, "Refresh", self.refresh).pack(side="right")
-        link = self.label(self, textvariable=self.source, size=8, color=MUTED,
-                           anchor="w", justify="left", wraplength=390, cursor="hand2")
-        link.pack(fill="x", pady=(0, 9))
-        link.bind("<Button-1>", lambda _: self.open_source())
+        self.source_label = self.label(self, textvariable=self.source, size=8, color=MUTED,
+                                       anchor="w", justify="left", wraplength=390, cursor="hand2")
+        self.source_label.pack(fill="x", pady=(0, 9))
+        self.source_label.bind("<Button-1>", lambda _: self.open_source())
+        self.period_label = self.label(self, textvariable=self.period, size=8, color=MUTED,
+                                       anchor="w", justify="left", wraplength=390, cursor="hand2")
+        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         self._empty_detail("Loading TFT compositions…")
 
     def _wheel(self, event):
@@ -321,8 +318,9 @@ class TftPanel(tk.Frame):
         self.period_editorial = editorial
         self.period.set(data_period(metadata, editorial=editorial) if metadata else "")
         self.period_label.pack_forget()
+        self.source_label.pack_configure(pady=0 if metadata else (0, 9))
         if metadata:
-            self.period_label.pack(fill="x", pady=(0, 8))
+            self.period_label.pack(fill="x", pady=(0, 9), after=self.source_label)
 
     def show_period_details(self):
         if self.period_metadata:

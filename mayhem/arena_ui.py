@@ -7,7 +7,7 @@ from tkinter import messagebox, ttk
 import webbrowser
 
 from .data import resolve_champion_id
-from .data_timing import data_freshness, data_period, data_period_details
+from .data_timing import data_period, data_period_details
 
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
@@ -102,11 +102,6 @@ class ArenaPanel(tk.Frame):
         for key, title in (("champions", "Champions"), ("augments", "Augments"), ("items", "Items")):
             self.tabs[key] = self.button(tabs, title, lambda key=key: self.switch_view(key))
             self.tabs[key].pack(side="left", expand=True, fill="x", padx=1)
-        self.period_host = tk.Frame(self, bg=BG)
-        self.period_host.pack(fill="x")
-        self.period_label = self.label(self.period_host, textvariable=self.period, size=10, color=TEXT,
-                                       anchor="w", justify="left", wraplength=395, cursor="hand2")
-        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         controls = tk.Frame(self, bg=BG)
         self.controls = controls
         controls.pack(fill="x", pady=(0, 8))
@@ -177,6 +172,9 @@ class ArenaPanel(tk.Frame):
                                        anchor="w", justify="left", cursor="hand2")
         self.source_label.pack(fill="x", pady=(5, 0))
         self.source_label.bind("<Button-1>", lambda _: self.open_source())
+        self.period_label = self.label(self, textvariable=self.period, size=8, color=MUTED,
+                                       anchor="w", justify="left", wraplength=395, cursor="hand2")
+        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         footer = tk.Frame(self, bg=BG)
         footer.pack(fill="x", pady=(8, 10))
         self.button(footer, "Retry data", self.retry).pack(side="left")
@@ -339,8 +337,7 @@ class ArenaPanel(tk.Frame):
                 bits.append(str(data[key]))
         if data.get("stale"):
             bits.append("CACHED")
-        freshness = data_freshness(data)
-        self.source.set(" · ".join(bits) + ("\n" + freshness if freshness else ""))
+        self.source.set(" · ".join(bits))
         displayed = self.catalog if self.view.get() == "champions" else self.data
         self.set_period(displayed)
         self.source_url = data.get("source_url")
@@ -352,7 +349,7 @@ class ArenaPanel(tk.Frame):
         self.period.set(data_period(metadata) if metadata else "")
         self.period_label.pack_forget()
         if metadata:
-            self.period_label.pack(fill="x", pady=(0, 8))
+            self.period_label.pack(fill="x", after=self.source_label)
 
     def show_period_details(self):
         if self.period_metadata:

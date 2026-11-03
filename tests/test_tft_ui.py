@@ -6,7 +6,8 @@ from tkinter import ttk
 import unittest
 from unittest.mock import Mock, patch
 
-from mayhem.tft_ui import TftPanel, filtered_rows, metric_values, resolve_choice, selection_choices, source_metadata
+from mayhem.tft_ui import TftPanel, _view_metadata, filtered_rows, metric_values, resolve_choice, selection_choices, source_metadata
+from mayhem.data_timing import data_period, data_period_details
 
 
 DATA = {
@@ -59,12 +60,12 @@ class DataPresentationTests(unittest.TestCase):
         self.assertEqual(url, "https://example.test/tiers")
         self.assertIn("Ranked", source_metadata(DATA, "comps")[0])
 
-    def test_stats_label_separates_unknown_match_dates_from_dataset_update(self):
+    def test_stats_label_keeps_dataset_update_out_of_source_context(self):
         data = {**DATA, "updated": "2026-11-01T20:00:00+00:00", "updated_scope": "dataset"}
         text, _url = source_metadata(data, "comps")
-        context, timing = text.split("\n", 1)
-        self.assertNotIn("2026-11-01", context)
-        self.assertEqual(timing, "Dataset updated 2026-11-01 20:00 UTC")
+        self.assertNotIn("\n", text)
+        self.assertNotIn("2026-11-01", text)
+        self.assertEqual(_view_metadata(data, "comps")["updated"], data["updated"])
 
     def test_augment_timing_never_inherits_statistical_update_or_sample_dates(self):
         data = {**DATA, "updated": "2026-11-01T20:00:00Z", "data_date": "2026-11-01",
@@ -79,10 +80,8 @@ class DataPresentationTests(unittest.TestCase):
                 self.assertNotIn("2026-", text)
                 self.assertNotIn("Match dates", text)
                 self.assertNotIn("Dataset updated", text)
-                with patch("mayhem.tft_ui.data_freshness", return_value="Timing") as timing:
-                    source_metadata(data, "augments")
-                meta = timing.call_args.args[0]
-                self.assertTrue(timing.call_args.kwargs["editorial"])
+                meta = _view_metadata(data, "augments")
+                self.assertEqual(data_period(meta, editorial=True), "Expert guidance · no match sample")
                 for key in ("data_date", "updated_scope", "fetched_at", "_fetched_at",
                             "sample_start", "sample_end", "dateStats"):
                     self.assertNotIn(key, meta)
@@ -92,7 +91,10 @@ class DataPresentationTests(unittest.TestCase):
         data["updated_scope"] = "dataset"
         data["view_meta"]["augments"]["updated"] = "2026-10-30T21:21:03.962Z"
         text, _url = source_metadata(data, "augments")
-        self.assertEqual(text.split("\n", 1)[1], "Edited 2026-10-30 21:21 UTC")
+        self.assertNotIn("\n", text)
+        meta = _view_metadata(data, "augments")
+        self.assertEqual(data_period(meta, editorial=True), "Expert tiers · edited Oct 30, 2026")
+        self.assertIn("Edited 2026-10-30 21:21 UTC", data_period_details(meta, editorial=True))
         self.assertNotIn("2026-10-25", text)
         self.assertNotIn("Match dates", text)
         self.assertNotIn("Dataset updated", text)

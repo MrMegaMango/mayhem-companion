@@ -20,7 +20,7 @@ from PIL import Image, ImageTk
 from .windows import Hotkeys, set_window_style
 from .worker import Worker
 from .data import resolve_champion_id
-from .data_timing import data_freshness, data_period, data_period_details
+from .data_timing import data_period, data_period_details
 from .displays import list_displays, select_display, place_panel
 from .tray import TrayIcon
 from .icons import IconLoader
@@ -214,11 +214,6 @@ class Companion:
         self.spells_tab.pack(side="left", fill="x", expand=True)
         self.period = tk.StringVar()
         self.period_metadata = None
-        self.period_host = tk.Frame(self.body, bg=BG)
-        self.period_host.pack(fill="x")
-        self.period_label = self.label(self.period_host, size=10, color=TEXT, textvariable=self.period,
-                                       anchor="w", justify="left", wraplength=398, cursor="hand2")
-        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         self.pages = tk.Frame(self.body, bg=BG)
         self.pages.pack(fill="both", expand=True)
         self.augment_panel = tk.Frame(self.pages, bg=BG)
@@ -290,6 +285,11 @@ class Companion:
                           cursor="hand2", anchor="w", justify="left", wraplength=398)
         link.pack(fill="x")
         link.bind("<Button-1>", lambda _: self.open_source())
+        self.period_host = tk.Frame(footer, bg=BG)
+        self.period_host.pack(fill="x")
+        self.period_label = self.label(self.period_host, size=8, color=MUTED, textvariable=self.period,
+                                       anchor="w", justify="left", wraplength=398, cursor="hand2")
+        self.period_label.bind("<Button-1>", lambda _: self.show_period_details())
         more = self.button(footer, "More ▾", self.show_more, BG)
         more.configure(fg=MUTED, font=("Segoe UI", 9), padx=0, pady=4)
         more.pack(anchor="e", pady=(2, 0))
@@ -1039,7 +1039,7 @@ class Companion:
         self.period.set(data_period(metadata) if metadata else "")
         self.period_label.pack_forget()
         if metadata:
-            self.period_label.pack(fill="x", pady=(0, 8))
+            self.period_label.pack(fill="x")
 
     def show_period_details(self):
         if self.period_metadata:
@@ -1049,8 +1049,7 @@ class Companion:
         marker = " · cached/offline" if metadata.get("stale") else ""
         source = metadata.get("source") or "ARAMKit"
         patch = f" · Patch {metadata['version']}" if metadata.get("version") else ""
-        freshness = data_freshness(metadata)
-        self.source.set(f"{source}{patch}{marker}" + (f"\n{freshness}" if freshness else ""))
+        self.source.set(f"{source}{patch}{marker}")
         self.set_period(metadata)
 
     def clear_offers(self):

@@ -120,7 +120,8 @@ class StateTests(unittest.TestCase):
         self.assertNotIn("Match dates", text)
         self.assertEqual(app.period.set.call_args.args[0], data_period(app.period_metadata))
         self.assertEqual(app.period_metadata["data_date"], "2026-10-30")
-        self.assertIn("Updated 2026-10-30", text)
+        self.assertNotIn("Updated", text)
+        self.assertIn("Oct 30, 2026", app.period.set.call_args.args[0])
         self.assertNotIn("2026-11-04", text)
 
     def test_background_spell_render_cannot_replace_visible_augment_period(self):

@@ -327,8 +327,9 @@ def preview_class():
                 assert self.period_label.winfo_manager(), "Build period is hidden"
                 assert "Oct 21" in self.period.get(), "Cached patch period has no start date"
                 period_bottom = self.period_label.winfo_rooty() + self.period_label.winfo_height()
-                assert period_bottom <= self.pages.winfo_rooty(), "Period must be above the results"
-                report["checks"].append("visible date range above build results")
+                assert self.period_label.winfo_rooty() >= self.pages.winfo_rooty() + self.pages.winfo_height(), "Period must be in the footer below the results"
+                assert period_bottom <= self.root.winfo_rooty() + self.root.winfo_height(), "Footer period is clipped"
+                report["checks"].append("date range in existing footer below build results")
                 assert self.root.winfo_height() <= 700, "Build window exceeds 700px"
                 for widget in (self.more_button, self.build_note_label):
                     bottom = widget.winfo_rooty() - self.root.winfo_rooty() + widget.winfo_height()
