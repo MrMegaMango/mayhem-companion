@@ -24,6 +24,7 @@ MAX_PENDING = 128
 _ICON_URL = re.compile(
     r"(?:https://data\.aramkit\.com/assets/item/[A-Za-z0-9][A-Za-z0-9_-]*-[0-9a-f]{12}\.webp"
     r"|https://data\.aramkit\.com/assets/champion/[1-9][0-9]{0,9}-[0-9a-f]{12}\.webp"
+    r"|https://data\.aramkit\.com/assets/augment/[1-9][0-9]{0,9}-[0-9a-f]{12}\.webp"
     r"|https://winrate\.lol/img/w64/champion/[A-Za-z0-9]{1,40}\.jpg"
     r"|https://winrate\.lol/img/w128/item/[0-9]{1,10}\.jpg"
     r"|https://winrate\.lol/img/augment/[0-9]{1,10}\.png"

@@ -134,9 +134,14 @@ class Worker(threading.Thread):
             elif task == "builds":
                 token, champion = payload
                 self.emit("builds", (token, self.provider.item_builds_for(champion)))
+            elif task == "augment_ranks":
+                token, champion = payload
+                self.emit("augment_ranks", (token, self.provider.augment_ranks_for(champion)))
         except Exception as exc:
             if task == "catalog":
                 self.emit("error", f"Data unavailable: {exc}. Use Retry data.")
+            elif task == "augment_ranks":
+                self.emit("augment_ranks_error", (payload[0], str(exc), bool(getattr(exc, "transient", False))))
             else:
                 self.emit(task + "_error", (payload[0], str(exc)))
 
@@ -264,6 +269,14 @@ class Worker(threading.Thread):
         # The lobby exposes the champion while spells can still be changed.
         # Keep the in-game API as the source once champion select has ended.
         selection = self.client.poll()
+        generation = getattr(self.client, "game_generation", None)
+        generation = generation if type(generation) is int else None
+        phase = selection.get("phase")
+        if (generation != getattr(self, "_live_generation", None)
+                or selection.get("status") == "champ_select"
+                or phase is not None and phase not in ("GameStart", "InProgress", "Reconnect")):
+            self._seen_live_game = False
+        self._live_generation = generation
         if selection.get("is_tft") is True or selection.get("status") == "tft":
             return selection
         if selection.get("status") == "champ_select":
@@ -273,9 +286,22 @@ class Worker(threading.Thread):
             # The game API can linger after a match. A known lobby/end phase
             # takes precedence so it cannot reopen the panel on the desktop.
             return selection
+        if phase == "GameStart":
+            # The previous match's live API may still answer during launch.
+            # The current client phase and exact local selection take priority.
+            self._seen_live_game = False
+            return selection
         game = poll_active_player(timeout=0.5)
         if game.get("status") != "live" and phase is not None:
-            # Keep ARAM context while the game loads or reconnects.
+            # Once play was observed, a transient API outage is not a new
+            # loading screen. Preserve the ordinary reconnect/wait behavior.
+            if selection.get("status") == "loading" and getattr(self, "_seen_live_game", False):
+                return {**selection, "status": "waiting", "message": "Waiting for the game connection."}
+            return selection
+        if (selection.get("status") == "loading" and not getattr(self, "_seen_live_game", False)
+                and game.get("game_time") == 0):
+            # The live endpoint can begin answering before the loading screen
+            # closes. Zero game time is not proof that play has begun.
             return selection
         game["phase"] = phase
         live_mode = game.get("game_mode")
@@ -302,6 +328,8 @@ class Worker(threading.Thread):
         known_mode = selection.get("is_aram")
         game["is_aram"] = (known_mode if known_mode is not None else
                            is_aram_mode(game.get("game_mode")) if game.get("game_mode") else None)
+        if game.get("status") == "live":
+            self._seen_live_game = True
         return game
 
     def run(self):
@@ -322,7 +350,7 @@ class Worker(threading.Thread):
                         # Refresh the UI after confirmation, even if these are
                         # the same IDs it had before manual browsing/rescan.
                         self.force_offer_emit = True
-                    elif task in ("lookup", "spells", "builds"):
+                    elif task in ("lookup", "spells", "builds", "augment_ranks"):
                         self.queue_aram_task(task, payload)
                     elif task in ("tft", "tft_items"):
                         self.queue_tft_task(task, payload)

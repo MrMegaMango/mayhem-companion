@@ -279,7 +279,7 @@ class ArenaPanel(tk.Frame):
         previous_game = self.last_game
         previous_status = self.last_game.get("status")
         self.last_game = game
-        active = game.get("is_arena") is True and game.get("status") in ("champ_select", "live")
+        active = game.get("is_arena") is True and game.get("status") in ("champ_select", "loading", "live")
         champions = (self.catalog or {}).get("champions", {})
         champion = str(game.get("champion_id")) if active else None
         if champion not in champions:
@@ -290,7 +290,12 @@ class ArenaPanel(tk.Frame):
         if self.follow:
             self.choose_champion(self.live_champion)
             if active and previous_status != game.get("status"):
-                self.switch_view("champions" if game.get("status") == "champ_select" else "items", automatic=True)
+                loading = game.get("status") == "loading"
+                if loading:
+                    self.offers = []
+                    self.sort.set("Win rate")
+                self.switch_view("champions" if game.get("status") == "champ_select" else
+                                 "augments" if loading else "items", automatic=True)
             if not active:
                 changed = bool(self.offers) or previous_game != game
                 self.offers = []

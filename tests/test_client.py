@@ -887,5 +887,107 @@ class LockfileAndTransportTests(unittest.TestCase):
         self.assertEqual(https._context.verify_mode, ssl.CERT_NONE)
 
 
+class LoadingSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.http = patch.object(client, "_get_json").start()
+        self.addCleanup(patch.stopall)
+        self.reader = client.ClientReader()
+        patch.object(self.reader, "_credentials", return_value=client._Credentials(54321, "PRIVATE-token")).start()
+
+    def flow(self, phase="GameStart", champion=36, game_id=123, mode="KIWI"):
+        value = gameflow(mode, 2400 if mode == "KIWI" else 1700, phase)
+        value["gameData"].update(gameId=game_id, playerChampionSelections=[
+            {"puuid": "PRIVATE-teammate", "championId": 22, "spell1Id": 4, "spell2Id": 7},
+            {"puuid": "PRIVATE-local", "championId": champion, "spell1Id": 4, "spell2Id": 32}])
+        return value
+
+    def test_starts_mid_load_from_exact_local_selection_in_supported_modes(self):
+        for phase in ("GameStart", "InProgress", "Reconnect"):
+            for mode in ("KIWI", "CHERRY"):
+                with self.subTest(phase=phase, mode=mode):
+                    self.reader._reset_game()
+                    self.http.reset_mock()
+                    self.http.side_effect = [phase, self.flow(phase, mode=mode),
+                                             {"puuid": "PRIVATE-local", "displayName": "PRIVATE-name"}]
+                    result = self.reader.poll()
+                    self.assertEqual((result["status"], result["champion_id"], result["phase"]),
+                                     ("loading", "36", phase))
+                    self.assertEqual([spell["id"] for spell in result["summoner_spells"]], ["4", "32"])
+                    self.assertEqual(result["is_aram"], mode == "KIWI")
+                    self.assertEqual(result["is_arena"], mode == "CHERRY")
+                    self.assertFalse(result["champion_preview"])
+                    self.assertIsNone(result["available_champion_ids"])
+                    self.assertNotIn("PRIVATE", json.dumps(result))
+                    self.assertNotIn("gameId", json.dumps(result))
+                    self.assertEqual([c.args[2] for c in self.http.call_args_list],
+                                     [client._PHASE_PATH, client._GAMEFLOW_PATH, client._SUMMONER_PATH])
+
+    def test_loading_selection_is_fresh_after_last_second_champion_swap(self):
+        self.http.side_effect = ["GameStart", self.flow(champion=36), {"puuid": "PRIVATE-local"},
+                                 "InProgress", self.flow("InProgress", champion=157)]
+        self.assertEqual(self.reader.poll()["champion_id"], "36")
+        self.assertEqual(self.reader.poll()["champion_id"], "157")
+        self.assertEqual(self.http.call_count, 5)  # identity read once for this game
+
+    def test_champ_select_without_game_id_does_not_block_loading(self):
+        before = self.flow("ChampSelect", game_id=0)
+        self.http.side_effect = ["ChampSelect", before, session(22),
+                                 "GameStart", self.flow(champion=36), {"puuid": "PRIVATE-local"}]
+        self.assertEqual(self.reader.poll()["champion_id"], "22")
+        self.assertEqual(self.reader.poll()["champion_id"], "36")
+
+    def test_ambiguous_absent_and_invalid_local_selections_are_not_guessed(self):
+        for entries in ([{"puuid": "PRIVATE-teammate", "championId": 22}],
+                        [{"puuid": "PRIVATE-local", "championId": 36}] * 2,
+                        [{"puuid": "PRIVATE-local", "championId": 0}],
+                        [{"puuid": "PRIVATE-local", "championId": True}]):
+            self.reader._reset_game()
+            value = self.flow(); value["gameData"]["playerChampionSelections"] = entries
+            self.http.side_effect = ["GameStart", value, {"puuid": "PRIVATE-local"}]
+            result = self.reader.poll()
+            self.assertEqual(result["status"], "waiting")
+            self.assertIsNone(result["champion_id"])
+
+    def test_unsupported_modes_and_malformed_game_boundaries_do_not_read_identity(self):
+        cases = [self.flow(mode="CLASSIC"), self.flow(game_id=0), self.flow(game_id=True)]
+        cases.append(self.flow()); cases[-1].pop("phase")
+        for value in cases:
+            self.reader._reset_game(); self.http.reset_mock()
+            self.http.side_effect = ["GameStart", value]
+            result = self.reader.poll()
+            self.assertEqual(result["status"], "waiting")
+            self.assertIsNone(result["champion_id"])
+            self.assertEqual(self.http.call_count, 2)
+
+    def test_local_identity_failure_never_uses_a_teammate(self):
+        for response in ({}, {"puuid": ""}, {"puuid": True}, URLError("PRIVATE-token")):
+            self.reader._reset_game()
+            self.http.side_effect = ["GameStart", self.flow(), response]
+            result = self.reader.poll()
+            self.assertEqual(result["status"], "waiting")
+            self.assertIsNone(result["champion_id"])
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_lobby_and_changed_game_refresh_identity_and_do_not_leak_champion(self):
+        self.http.side_effect = ["GameStart", self.flow(), {"puuid": "PRIVATE-local"}, "Lobby",
+                                 "GameStart", self.flow(champion=157, game_id=456), {"puuid": "PRIVATE-teammate"}]
+        self.assertEqual(self.reader.poll()["champion_id"], "36")
+        generation = self.reader.game_generation
+        self.assertIsNone(self.reader.poll()["champion_id"])
+        self.assertGreater(self.reader.game_generation, generation)
+        self.assertEqual(self.reader.poll()["champion_id"], "22")
+
+    def test_transient_metadata_failure_clears_identity_without_new_game_generation(self):
+        self.http.side_effect = ["InProgress", self.flow("InProgress"), {"puuid": "PRIVATE-local"},
+                                 "InProgress", URLError("PRIVATE"),
+                                 "InProgress", self.flow("InProgress"), {"puuid": "PRIVATE-local"}]
+        self.reader.poll(); generation = self.reader.game_generation
+        self.assertIsNone(self.reader.poll()["champion_id"])
+        self.assertIsNone(self.reader._local_puuid)
+        self.assertEqual(self.reader.game_generation, generation)
+        self.assertEqual(self.reader.poll()["champion_id"], "36")
+        self.assertEqual(self.reader.game_generation, generation)
+
+
 if __name__ == "__main__":
     unittest.main()

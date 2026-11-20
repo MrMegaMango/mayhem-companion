@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 os.environ["MAYHEM_QA_CAPTURE"] = "1"
 from mayhem.data import DataUnavailableError, StatsProvider, _catalog_resource, _version_row
 
-VIEWS = ("augments", "select", "builds", "followups", "arena", "tft", "tft-items", "tft-augments")
+VIEWS = ("augments", "select", "builds", "followups", "arena", "tft", "tft-items", "tft-augments", "loading")
 AUGMENTS = ("1045", "1030", "1048")
 CHOICES = ("157", "1", "33", "51", "4", "63", "55", "10")
 
@@ -110,18 +110,18 @@ def preview_class():
             self.root, self.options, self.provider = root, options, provider
             self.storage, self.settings_path, self.settings = scratch, scratch / "settings.json", {}
             self.events, self.requests, self.stop = queue.Queue(), queue.Queue(), threading.Event()
-            for name in ("_closed", "recovery_visible", "_autostart_busy", "hidden", "locked", "game_live",
+            for name in ("_closed", "recovery_visible", "_autostart_busy", "hidden", "locked", "game_live", "game_loading", "rank_pending",
                          "auto_visible", "browse_mode", "champ_select", "champion_preview", "is_auto_offer",
                          "offers_active", "choice_active", "inventory_current", "tft_loaded", "tft_pending",
                          "arena_pending"):
                 setattr(self, name, False)
             for name in ("feedback_dialog", "analytics_dialog", "champion", "live_champion", "_placement_job",
                          "_last_display", "visibility_override", "last_active_status", "drag_start",
-                         "spell_champion", "spell_data", "choice_ids", "choice_context", "build_champion",
+                         "rank_champion", "rank_data", "rank_error", "spell_champion", "spell_data", "choice_ids", "choice_context", "build_champion",
                          "build_data", "live_items", "inventory_champion", "build_order_key", "tft_unit",
                          "arena_champion", "analytics"):
                 setattr(self, name, None)
-            for name in ("token", "spell_token", "choice_token", "build_token", "tft_token", "tft_item_token",
+            for name in ("token", "rank_token", "spell_token", "choice_token", "build_token", "tft_token", "tft_item_token",
                          "arena_token", "arena_champion_token"):
                 setattr(self, name, 0)
             self.catalog = provider.load_catalog()
@@ -135,7 +135,7 @@ def preview_class():
             for method in ("help", "show_feedback", "show_analytics", "change_scan", "toggle_lock",
                            "auto_champion", "select_champion", "filter_champions", "select_augment",
                            "filter_augments", "clear_offers", "open_source", "start_drag", "drag", "end_drag",
-                           "lookup", "lookup_builds", "lookup_spells", "rescan", "load_tft", "load_arena",
+                           "lookup", "lookup_augment_ranks", "lookup_builds", "lookup_spells", "rescan", "load_tft", "load_arena",
                            "load_arena_champion", "toggle_autostart", "save_settings", "sync_analytics"):
                 setattr(self, method, lambda *args, **kwargs: None)
             self.build()
@@ -209,7 +209,7 @@ def preview_class():
             for panel in (self.body, self.tft_panel, self.arena_panel, self.choice_panel):
                 panel.pack_forget()
             self.badge.configure(text="EXAMPLE", fg=ACCENT)
-            self.game_live = self.champ_select = self.inventory_current = self.choice_active = False
+            self.game_live = self.game_loading = self.champ_select = self.inventory_current = self.choice_active = False
             self.live_items = self.inventory_champion = None
             self.spells_tab.configure(text="Spells")
             if view == "arena":
@@ -241,7 +241,12 @@ def preview_class():
                 self.champion = self.live_champion = "157" if view == "select" else "63"
                 self.champ_var.set(self.catalog["champions"][self.champion]["name"])
                 self.champ_box["values"] = [self.champ_var.get()]
-                if view == "augments":
+                if view == "loading":
+                    self.game_loading = True
+                    self.rank_champion = self.champion
+                    self.rank_data = self.provider.augment_ranks_for(self.champion)
+                    self.switch_view("rankings")
+                elif view == "augments":
                     self.offer_ids = list(AUGMENTS)
                     for ident, card in zip(AUGMENTS, self.cards):
                         card["var"].set(self.catalog["augments"][ident]["name"])
@@ -353,7 +358,7 @@ def preview_class():
                     report["views"][view] = self.root.geometry()
                     period_owner = self.arena_panel if view == "arena" else self.tft_panel if view.startswith("tft") else self
                     report["periods"][view] = period_owner.period.get()
-                report["checks"].append("all eight cached view transitions")
+                report["checks"].append("all cached view transitions")
                 assert not callback_errors, "; ".join(callback_errors)
             except Exception as error:
                 report["errors"].append(f"{type(error).__name__}: {error}")

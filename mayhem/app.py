@@ -26,6 +26,7 @@ from .tray import TrayIcon
 from .icons import IconLoader
 from .tft_ui import TftPanel
 from .champion_choices import ChampionChoicesPanel
+from .augment_rankings import AugmentRankingsPanel
 from .arena_ui import ArenaPanel
 from . import __version__
 from .feedback import (FEEDBACK_EMAIL, build_report, email_draft, feedback_mode,
@@ -93,7 +94,7 @@ class Companion:
         self.visibility_override = None
         self.game_status = "waiting"
         self.last_active_status = None
-        self.champ_select = self.champion_preview = False
+        self.champ_select = self.champion_preview = self.game_loading = False
         self.token = 0
         self.is_auto_offer = False
         self.offers_active = False
@@ -103,6 +104,9 @@ class Companion:
         self.augment_names, self.champion_names = [], []
         self.augment_by_name = {}
         self.drag_start = None
+        self.rank_token = 0
+        self.rank_champion = self.rank_data = self.rank_error = None
+        self.rank_pending = False
         self.spell_token = 0
         self.spell_champion = None
         self.spell_data = None
@@ -205,7 +209,7 @@ class Companion:
         tabs = tk.Frame(self.body, bg=PANEL, padx=3, pady=3)
         tabs.pack(fill="x", pady=(0, 8))
         self.view = tk.StringVar(value="augments")
-        self.augment_tab = self.button(tabs, "Augments", lambda: self.switch_view("augments"), FIELD)
+        self.augment_tab = self.button(tabs, "Augments", lambda: self.switch_view("rankings" if self.game_loading else "augments"), FIELD)
         self.augment_tab.pack(side="left", fill="x", expand=True)
         self.augment_tab.configure(fg=ACCENT)
         self.builds_tab = self.button(tabs, "Builds", lambda: self.switch_view("builds"), PANEL)
@@ -273,6 +277,10 @@ class Companion:
             metadata.pack(fill="x")
             self.cards.append({"var": name, "box": box, "value": value, "meta": metadata,
                                "frame": card, "editor": editor, "metric_row": row, "rank": rank})
+        self.rankings_panel = AugmentRankingsPanel(
+            self.pages, request_icon=self.request_tft_icon,
+            on_resize=lambda: self.root.after_idle(self.fit_window),
+            on_retry=lambda: self.lookup_augment_ranks(force=True))
         self.build_spells(style)
         self.build_items()
         self.status = tk.StringVar(value="Loading augment data…")
@@ -332,6 +340,7 @@ class Companion:
     def show_more(self):
         menu = tk.Menu(self.root, tearoff=False, bg=FIELD, fg=TEXT,
                        activebackground=BORDER, activeforeground=TEXT, font=("Segoe UI", 10))
+        menu.add_command(label="Browse all augments", command=lambda: self.switch_view("rankings"))
         menu.add_command(label="Clear choices", command=self.clear_offers)
         menu.add_command(label="Refresh data", command=lambda: self.requests.put(("retry", None)))
         menu.add_separator()
@@ -500,10 +509,12 @@ class Companion:
         self.requests.put(("scan", None))
         self.champ_var.set(self.catalog["champions"][self.champion]["name"]
                            if self.champion and self.catalog else "Auto detect champion")
-        active = self.game_live or self.champ_select
-        self.badge.configure(text="SELECT" if self.champ_select else "LIVE" if self.game_live else "WAITING",
+        active = self.game_live or self.champ_select or self.game_loading
+        self.badge.configure(text="LOADING" if self.game_loading else "SELECT" if self.champ_select else "LIVE" if self.game_live else "WAITING",
                              fg=ACCENT if active else MUTED)
-        if self.champ_select:
+        if self.game_loading:
+            self.switch_view("rankings", automatic=True)
+        elif self.champ_select:
             self.switch_view("spells", automatic=True)
         elif self.game_live:
             self.switch_view("builds", automatic=True)
@@ -521,12 +532,52 @@ class Companion:
         if ident:
             self.edit_augment(index, False)
 
+    def lookup_augment_ranks(self, force=False):
+        if not force and self.rank_champion == self.champion:
+            return
+        self.rank_token += 1
+        self.rank_champion = self.champion
+        self.rank_data = self.rank_error = None
+        self.rank_pending = bool(self.champion)
+        if self.champion:
+            name = (self.catalog or {}).get("champions", {}).get(self.champion, {}).get("name", "this champion")
+            self.rankings_panel.set_loading(name)
+            self.requests.put(("augment_ranks", (self.rank_token, self.champion)))
+        else:
+            self.rankings_panel.set_error("Choose a champion to see augment win rates.")
+        if self.view.get() == "rankings":
+            self.render_augment_ranks()
+
+    def render_augment_ranks(self):
+        if self.display_mode != "aram" or self.view.get() != "rankings":
+            return
+        self.status.set("Game loading · top augments for your champion" if self.game_loading
+                        else "Champion-specific augment win rates · all picks")
+        if self.rank_data is not None:
+            self.rankings_panel.set_data(self.rank_data)
+            self.update_source(self.rank_data)
+        else:
+            self.set_period(None)
+            self.source.set("ARAMKit · champion-specific augment data")
+            if self.rank_error:
+                self.rankings_panel.set_error(self.rank_error)
+            elif not self.champion:
+                self.rankings_panel.set_error("Waiting for your champion…" if self.game_loading
+                                              else "Choose a champion to see augment win rates.")
+        self.root.after_idle(self.fit_window)
+
     def lookup(self):
+        # The shared champion snapshot is loaded once during select; loading
+        # can display its rankings without waiting for the first OCR offer.
         if self.view.get() == "augments":
             self.set_period(None)
         self.reset_augment_emphasis()
+        if self.game_loading:
+            self.lookup_augment_ranks()
         self.lookup_spells()
         self.lookup_builds()
+        if not self.game_loading:
+            self.lookup_augment_ranks()
         self.token += 1
         for ident, card in zip(self.offer_ids, self.cards):
             card["value"].configure(text="—", fg=TEXT)
@@ -710,15 +761,19 @@ class Companion:
         self.augment_panel.pack_forget()
         self.spell_panel.pack_forget()
         self.build_panel.pack_forget()
-        {"augments": self.augment_panel, "spells": self.spell_panel,
+        self.rankings_panel.pack_forget()
+        {"rankings": self.rankings_panel, "augments": self.augment_panel, "spells": self.spell_panel,
          "builds": self.build_panel}[view].pack(fill="both", expand=True)
-        self.augment_tab.configure(bg=FIELD if view == "augments" else PANEL,
-                                   fg=ACCENT if view == "augments" else MUTED)
+        self.augment_tab.configure(bg=FIELD if view in ("augments", "rankings") else PANEL,
+                                   fg=ACCENT if view in ("augments", "rankings") else MUTED)
         self.spells_tab.configure(bg=FIELD if view == "spells" else PANEL,
                                    fg=ACCENT if view == "spells" else MUTED)
         self.builds_tab.configure(bg=FIELD if view == "builds" else PANEL,
                                    fg=ACCENT if view == "builds" else MUTED)
-        if view == "spells":
+        if view == "rankings":
+            self.lookup_augment_ranks()
+            self.render_augment_ranks()
+        elif view == "spells":
             self.lookup_spells()
             self.render_spells()
         elif view == "builds":
@@ -1136,7 +1191,7 @@ class Companion:
     def update_visibility(self, game):
         phase = game.get("phase")
         active_phases = ("ChampSelect", "GameStart", "InProgress", "Reconnect")
-        in_match = (game.get("status") in ("champ_select", "live", "tft")
+        in_match = (game.get("status") in ("champ_select", "loading", "live", "tft")
                     or phase in active_phases)
         visible = (game.get("is_aram") is True or game.get("is_tft") is True
                    or game.get("is_arena") is True) and in_match
@@ -1205,6 +1260,7 @@ class Companion:
                     item["icon"].configure(image=photo)
             self.tft_panel.on_icon(url, photo)
             self.choice_panel.on_icon(url, photo)
+            self.rankings_panel.on_icon(url, photo)
             self.arena_panel.on_icon(url, photo)
         elif kind == "tray_action":
             if payload == "show":
@@ -1248,6 +1304,8 @@ class Companion:
                 self.lookup_spells(force=True)
             if self.display_mode == "aram" and (refreshing or self.build_token == previous_build_token):
                 self.lookup_builds(force=True)
+            if self.display_mode == "aram":
+                self.lookup_augment_ranks(force=refreshing)
             self.update_champion_choices(self.last_game_context, force=refreshing)
         elif kind == "game":
             self.handle_game(payload)
@@ -1332,6 +1390,20 @@ class Companion:
             token, rates = payload
             if token == self.token:
                 self.render_rates(rates)
+        elif kind == "augment_ranks":
+            token, data = payload
+            if (token == self.rank_token and str(data.get("champion_id")) == self.champion
+                    and self.rank_champion == self.champion):
+                self.rank_pending = False
+                self.rank_data, self.rank_error = data, None
+                self.render_augment_ranks()
+        elif kind == "augment_ranks_error":
+            token, error, _transient = payload
+            if token == self.rank_token and self.rank_champion == self.champion:
+                self.rank_pending = False
+                self.rank_data = None
+                self.rank_error = str(error)[:180]
+                self.render_augment_ranks()
         elif kind == "spells":
             token, data = payload
             if token == self.spell_token and str(data.get("champion_id")) == self.champion:
@@ -1396,19 +1468,21 @@ class Companion:
             elif game.get("is_aram") is True or game.get("is_tft") is False:
                 self.set_game_mode("aram")
         self.update_champion_choices(game)
+        self.game_loading = game.get("status") == "loading"
         if self.display_mode == "arena":
             self.arena_panel.handle_game(game)
-            active = game.get("is_arena") is True and game.get("status") in ("champ_select", "live")
+            active = game.get("is_arena") is True and game.get("status") in ("champ_select", "loading", "live")
             self.game_status = "arena" if active else "waiting"
             self.game_live = self.champ_select = self.champion_preview = False
             self.last_active_status = None
             self.live_champion = None
             self.live_items = self.inventory_champion = None
             self.inventory_current = self.offers_active = False
-            self.badge.configure(text=("SELECT" if game.get("status") == "champ_select" else "LIVE") if active else "BROWSE",
+            self.badge.configure(text=("LOADING" if self.game_loading else "SELECT" if game.get("status") == "champ_select" else "LIVE") if active else "BROWSE",
                                  fg=ACCENT if active else MUTED)
             return
         if self.display_mode == "tft":
+            self.game_loading = False
             if game.get("status") == "tft" and self.game_status != "tft":
                 self.load_tft()
             self.game_status = "tft" if game.get("status") == "tft" else "waiting"
@@ -1426,7 +1500,7 @@ class Companion:
         self.game_live = game.get("status") == "live"
         self.champ_select = game.get("status") == "champ_select"
         self.champion_preview = bool(game.get("champion_preview"))
-        active = self.game_live or self.champ_select
+        active = self.game_live or self.champ_select or self.game_loading
         previous_active_status = self.last_active_status
         if active:
             self.last_active_status = self.game_status
@@ -1452,7 +1526,7 @@ class Companion:
             self.inventory_champion = ident
             if game.get("item_ids") is not None:
                 self.live_items = list(game["item_ids"])
-        elif self.champ_select or self.last_active_status is None:
+        elif self.champ_select or self.game_loading or self.last_active_status is None:
             self.inventory_champion = None
             self.live_items = None
         if self.follow:
@@ -1463,15 +1537,21 @@ class Companion:
                 self.champ_var.set(self.catalog["champions"][ident]["name"] if ident else "Auto detect champion")
                 # Levels do not reliably identify pending picks or extra-augment mechanics.
                 self.stage.set("All picks")
-            self.badge.configure(text="SELECT" if self.champ_select else "LIVE" if ident else "WAITING",
+            self.badge.configure(text="LOADING" if self.game_loading else "SELECT" if self.champ_select else "LIVE" if ident else "WAITING",
                                  fg=ACCENT if active else MUTED)
             if active and self.game_status != previous_active_status:
                 if self.champ_select:
                     self.switch_view("spells", automatic=True)
+                elif self.game_loading:
+                    if not self.rank_pending and self.rank_data is None:
+                        self.lookup_augment_ranks(force=True)
+                    self.switch_view("rankings", automatic=True)
                 elif self.game_live:
                     self.switch_view("builds", automatic=True)
             if not active and not self.locked:
                 self.status.set("Waiting for champion select. Choose a champion to browse now.")
+        if (changed or phase_changed) and self.view.get() == "rankings":
+            self.render_augment_ranks()
         if (changed or phase_changed or previous_spells != self.live_spells) and self.view.get() == "spells":
             self.render_spells()
         elif self.view.get() == "spells":

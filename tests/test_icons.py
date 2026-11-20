@@ -76,6 +76,16 @@ class IconLoaderTests(unittest.TestCase):
                     valid.replace("data.aramkit.com/", "data.aramkit.com.evil.test/")):
             self.assertFalse(loader.request(url), url)
 
+    def test_aram_augment_icons_are_limited_to_hashed_numeric_assets(self):
+        loader, _, _ = self.loader(start=False)
+        valid = "https://data.aramkit.com/assets/augment/1001-13be65bb70a5.webp"
+        self.assertTrue(loader.request(valid))
+        for url in (valid.replace("/1001-", "/titan-"), valid + "?redirect=x",
+                    valid.replace("/1001-", "/0-"), valid.replace("https:", "http:"),
+                    valid.replace("data.aramkit.com/", "data.aramkit.com.evil.test/"),
+                    valid.replace("13be65bb70a5", "short")):
+            self.assertFalse(loader.request(url), url)
+
     def test_arena_icons_are_limited_to_verified_source_asset_paths(self):
         loader, _, _ = self.loader(start=False)
         valid = ("https://winrate.lol/img/w64/champion/MonkeyKing.jpg",

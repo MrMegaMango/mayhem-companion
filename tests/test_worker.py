@@ -60,6 +60,24 @@ class SpellWorkerTests(unittest.TestCase):
         self.assertIn(("builds_error", (9, "Build data unavailable")), events)
         self.assertIn(("game", {"status": "waiting", "phase": None, "is_aram": None}), events)
 
+    def test_augment_rank_lookup_preserves_token_for_stale_result_detection(self):
+        provider = Mock()
+        data = {"champion_id": "157", "rows": [{"augment_id": "3078", "win_rate": .67}]}
+        provider.augment_ranks_for.return_value = data
+        events = self.run_request(provider, "augment_ranks")
+        provider.augment_ranks_for.assert_called_once_with("157")
+        self.assertIn(("augment_ranks", (9, data)), events)
+
+    def test_augment_rank_failure_keeps_token_and_transient_status(self):
+        from mayhem.data import DataUnavailableError
+        for transient in (False, True):
+            with self.subTest(transient=transient):
+                provider = Mock()
+                provider.augment_ranks_for.side_effect = DataUnavailableError("Ranks unavailable", transient=transient)
+                events = self.run_request(provider, "augment_ranks")
+                self.assertIn(("augment_ranks_error", (9, "Ranks unavailable", transient)), events)
+                self.assertTrue(any(kind == "game" for kind, _ in events))
+
     def test_focus_loss_retains_last_offers_and_marks_scan_paused(self):
         events, requests, stop = queue.Queue(), queue.Queue(), Mock()
         stop.wait.side_effect = [False, True]
@@ -470,6 +488,46 @@ class OfferExpiryTests(unittest.TestCase):
                 self.assertEqual([value for kind, value in events if kind == "offers"],
                                  [[{"id": "1"}, {"id": "2"}, {"id": "3"}]])
                 self.assertFalse(worker.force_offer_emit)
+
+
+class LoadingPollTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = object.__new__(Worker)
+        self.worker.client = Mock(game_generation=1)
+        self.selection = {"status": "loading", "phase": "InProgress", "champion_id": "36",
+                          "is_aram": True, "is_arena": False, "game_mode": "KIWI"}
+        self.worker.client.poll.return_value = self.selection
+
+    def test_game_start_ignores_lingering_live_api(self):
+        self.selection["phase"] = "GameStart"
+        with patch("mayhem.worker.poll_active_player") as live:
+            self.assertEqual(self.worker.poll_game(), self.selection)
+        live.assert_not_called()
+
+    def test_zero_time_keeps_loading_then_actual_play_ends_it(self):
+        with patch("mayhem.worker.poll_active_player", side_effect=[
+                {"status": "live", "game_mode": "KIWI", "game_time": 0},
+                {"status": "live", "game_mode": "KIWI", "game_time": 1.5}]):
+            self.assertEqual(self.worker.poll_game()["status"], "loading")
+            self.assertEqual(self.worker.poll_game()["status"], "live")
+
+    def test_live_api_outage_does_not_reopen_loading_rankings(self):
+        with patch("mayhem.worker.poll_active_player", side_effect=[
+                {"status": "live", "game_mode": "KIWI", "game_time": 12}, {"status": "waiting"}]):
+            self.assertEqual(self.worker.poll_game()["status"], "live")
+            self.assertEqual(self.worker.poll_game()["status"], "waiting")
+
+    def test_next_game_can_load_after_previous_live_game(self):
+        with patch("mayhem.worker.poll_active_player", side_effect=[
+                {"status": "live", "game_mode": "KIWI", "game_time": 12}, {"status": "waiting"}]):
+            self.worker.poll_game()
+            self.worker.client.game_generation = 2
+            self.assertEqual(self.worker.poll_game()["status"], "loading")
+
+    def test_missing_live_api_before_play_preserves_loading_champion(self):
+        with patch("mayhem.worker.poll_active_player", return_value={"status": "waiting"}):
+            result = self.worker.poll_game()
+        self.assertEqual((result["status"], result["champion_id"]), ("loading", "36"))
 
 
 if __name__ == "__main__":

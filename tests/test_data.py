@@ -138,6 +138,89 @@ class StatsProviderTests(unittest.TestCase):
         self.assertEqual(self.requests[-1], detail_url())
         self.assertEqual(len(self.requests), 4)
 
+    def test_augment_rankings_fetch_one_champion_and_sort_observed_rates(self):
+        detail = copy.deepcopy(DETAIL)
+        detail["augments"]["all"].extend([
+            {"id": 4001, "sampleCount": 1, "winRate": .9, "augmentWinRate": .1},
+            {"id": 4002, "sampleCount": 800, "winRate": .67, "augmentWinRate": .2},
+            {"id": 4003, "sampleCount": 0, "winRate": 1.0, "augmentWinRate": .99},
+            {"id": 4004, "sampleCount": 5, "winRate": 0.0, "augmentWinRate": .99},
+        ])
+        self.responses[detail_url()] = detail
+        self.responses[resource_url("augments")] = {
+            **AUGMENTS, "4001": {"name": "Tiny sample", "rarity": "silver"},
+            "4002": {"name": "Larger sample", "rarity": "prismatic"},
+            "4004": {"name": "Observed zero", "rarity": "gold"},
+        }
+        result = self.provider.augment_ranks_for(157)
+        self.assertEqual([row["id"] for row in result["rows"]], ["4001", "4002", "3078", "4004"])
+        self.assertEqual([row["win_rate"] for row in result["rows"]], [.9, .67, .67, 0.0])
+        self.assertTrue(result["rows"][0]["low_sample"])
+        self.assertFalse(result["rows"][1]["low_sample"])
+        self.assertEqual(result["rows"][1]["rarity"], "prismatic")
+        self.assertEqual(result["rows"][2]["name"], AUGMENTS["3078"]["name"])
+        self.assertEqual(result["rows"][2]["tier"], "S")
+        self.assertEqual(result["rows"][2]["rank"], 1)
+        self.assertEqual((result["champion_id"], result["scope"], result["stage"], result["bracket"]),
+                         ("157", "champion", None, "all"))
+        self.assertEqual(result["source_url"], "https://aramkit.com/en-US/champions/yasuo")
+        self.assertEqual(self.requests.count(detail_url()), 1)
+        self.assertEqual(len(self.requests), 4)
+        result["rows"][0]["name"] = "Edited"
+        self.assertEqual(self.provider.augment_ranks_for(157)["rows"][0]["name"], "Tiny sample")
+        self.assertEqual(len(self.requests), 4)
+
+    def test_augment_rankings_do_not_invent_empty_or_zero_sample_results(self):
+        for observations in ([], [{"id": 999, "sampleCount": 0, "winRate": 1.0, "augmentWinRate": .99}]):
+            with self.subTest(observations=observations), tempfile.TemporaryDirectory() as directory:
+                detail = copy.deepcopy(DETAIL)
+                detail["augments"]["all"] = observations
+                self.responses[detail_url()] = detail
+                self.assertEqual(StatsProvider(Path(directory)).augment_ranks_for(157)["rows"], [])
+
+    def test_augment_rankings_require_matching_resource_names(self):
+        detail = copy.deepcopy(DETAIL)
+        detail["augments"]["all"][0]["id"] = 999
+        self.responses[detail_url()] = detail
+        with self.assertRaises(DataUnavailableError):
+            self.provider.augment_ranks_for(157)
+
+    def test_augment_rankings_use_original_resource_version_with_stale_champion(self):
+        self.responses[resource_url("augments")] = {"3078": {**AUGMENTS["3078"],
+            "icon": "assets/augment/3078-abcdef123456.webp", "rarity": "gold"}}
+        self.provider.augment_ranks_for(157)
+        self.next_version()
+        self.responses[resource_url("augments", NEXT_VERSION)] = {
+            "3078": {"name": "New patch name", "rarity": "silver"}}
+        self.responses[detail_url(NEXT_VERSION)] = TimeoutError("offline")
+        result = self.provider.augment_ranks_for(157)
+        self.assertEqual((result["version"], result["data_date"], result["stale"]),
+                         (VERSION["version"], VERSION["dataDate"], True))
+        self.assertEqual(result["rows"][0]["name"], AUGMENTS["3078"]["name"])
+        self.assertEqual(result["rows"][0]["rarity"], "gold")
+        self.assertEqual(result["rows"][0]["icon_url"], DATA_BASE + "/assets/augment/3078-abcdef123456.webp")
+
+    def test_optional_augment_artwork_rejects_other_ids_and_untrusted_urls(self):
+        valid = "assets/augment/3078-abcdef123456.webp"
+        for icon, expected in ((valid, DATA_BASE + "/" + valid),
+                               (DATA_BASE + "/" + valid, DATA_BASE + "/" + valid),
+                               (valid.replace("3078", "4001"), None),
+                               ("https://example.com/" + valid, None),
+                               (valid + "?redirect=1", None), (None, None)):
+            with self.subTest(icon=icon), tempfile.TemporaryDirectory() as directory:
+                self.responses[resource_url("augments")] = {"3078": {**AUGMENTS["3078"], "icon": icon}}
+                row = StatsProvider(Path(directory)).augment_ranks_for(157)["rows"][0]
+                self.assertEqual(row["icon_url"], expected)
+
+    def test_augment_rankings_honor_bracket_and_reject_arguments_before_fetch(self):
+        for champion, bracket in ((True, "all"), ("0", "all"), ("157", "other")):
+            with self.assertRaises(ValueError):
+                self.provider.augment_ranks_for(champion, bracket)
+        self.assertEqual(self.requests, [])
+        result = self.provider.augment_ranks_for("157", "high")
+        self.assertEqual(result["bracket"], "high")
+        self.assertEqual(self.requests[-1], detail_url(bracket="high"))
+
     def test_stage_rate_does_not_fall_back_to_overall_or_global(self):
         rate = self.provider.rate_for("157", "3078", stage=1)
         self.assertEqual(rate["win_rate"], 0.69)

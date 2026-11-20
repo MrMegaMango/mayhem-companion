@@ -110,6 +110,44 @@ class ArenaPanelTests(unittest.TestCase):
         self.assertIn("Loading champion", self.panel.message.get())
         self.assertEqual(self.panel.view.get(), "items")
 
+    def test_loading_keeps_champion_and_shows_ranked_augments_then_items_live(self):
+        self.start_live()
+        self.panel.set_offers(copy.deepcopy(OFFERS))
+        self.panel.sort.set("Games")
+        loading = {**LIVE, "status": "loading", "phase": "GameStart"}
+        self.panel.handle_game(loading)
+        self.assertEqual(self.panel.champion, "157")
+        self.assertEqual(self.panel.view.get(), "augments")
+        self.assertEqual(self.panel.sort.get(), "Win rate")
+        self.assertEqual(self.panel.offers, [])
+        self.assertEqual(self.panel.rows[0]["id"], "1")
+        self.panel.set_offers(copy.deepcopy(OFFERS))
+        self.assertEqual(self.panel.offers, [])
+        self.panel.handle_game(copy.deepcopy(LIVE))
+        self.assertEqual(self.panel.view.get(), "items")
+
+    def test_repeated_loading_poll_preserves_manual_navigation_and_filters(self):
+        self.start_live()
+        loading = {**LIVE, "status": "loading", "phase": "GameStart"}
+        self.panel.handle_game(loading)
+        self.panel.switch_view("items")
+        self.panel.query.set("Popular")
+        self.panel.sort.set("Games")
+        self.panel.handle_game(dict(loading))
+        self.assertEqual(self.panel.view.get(), "items")
+        self.assertEqual(self.panel.query.get(), "Popular")
+        self.assertEqual(self.panel.sort.get(), "Games")
+
+    def test_catalog_arriving_during_loading_resolves_selected_champion(self):
+        loading = {**LIVE, "status": "loading", "phase": "InProgress"}
+        self.panel.handle_game(loading)
+        self.panel.set_catalog(copy.deepcopy(CATALOG))
+        self.champion_request.assert_called_with("157", force=False)
+        self.assertEqual(self.panel.champion, "157")
+        self.assertEqual(self.panel.view.get(), "augments")
+        self.panel.set_champion_data("157", copy.deepcopy(DATA))
+        self.assertEqual(self.panel.rows[0]["id"], "1")
+
     def test_offers_show_only_champion_augment_rate_and_missing_stays_dash(self):
         self.start_live()
         self.panel.set_offers(copy.deepcopy(OFFERS))

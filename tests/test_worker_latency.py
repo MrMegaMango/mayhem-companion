@@ -95,7 +95,7 @@ class WorkerLatencyTests(unittest.TestCase):
             return CATALOG if task == "catalog" else {"champion_id": "157", "rows": []}
 
         method = {"catalog": provider.load_catalog, "spells": provider.summoner_spells_for,
-                  "builds": provider.item_builds_for}[task]
+                  "builds": provider.item_builds_for, "augment_ranks": provider.augment_ranks_for}[task]
         method.side_effect = blocked
         if task != "catalog":
             requests.put((task, (11, "157")))
@@ -122,6 +122,9 @@ class WorkerLatencyTests(unittest.TestCase):
     def test_blocked_build_request_does_not_delay_local_game_or_champion_dispatch(self):
         self.assert_public_request_does_not_block_local_work("builds")
 
+    def test_blocked_augment_ranks_do_not_delay_local_game_or_champion_dispatch(self):
+        self.assert_public_request_does_not_block_local_work("augment_ranks")
+
     def test_aram_queue_coalesces_each_kind_without_discarding_other_views(self):
         worker, events, _, provider, _, releases, _, _ = self.make_worker()
         entered, release = threading.Event(), threading.Event()
@@ -138,19 +141,20 @@ class WorkerLatencyTests(unittest.TestCase):
         self.assertTrue(entered.wait(3))
         for task, payload in (
             ("spells", (1, "157")), ("builds", (2, "157")),
-            ("lookup", (3, "157", ["1"], None)),
+            ("lookup", (3, "157", ["1"], None)), ("augment_ranks", (4, "157")),
             ("spells", (10, "62")), ("builds", (20, "62")),
-            ("lookup", (30, "62", ["2"], 2)),
+            ("lookup", (30, "62", ["2"], 2)), ("augment_ranks", (40, "62")),
         ):
             worker.queue_aram_task(task, payload)
         release.set()
-        observed = events.wait_until(lambda items: {kind for kind, _ in items} >= {"spells", "builds", "rates"})
+        observed = events.wait_until(lambda items: {kind for kind, _ in items} >= {"spells", "builds", "rates", "augment_ranks"})
         provider.summoner_spells_for.assert_called_once_with("62")
         provider.item_builds_for.assert_called_once_with("62")
         provider.rate_for.assert_called_once_with("62", "2", 2)
+        provider.augment_ranks_for.assert_called_once_with("62")
         self.assertEqual({kind: payload[0] for kind, payload in observed
-                          if kind in ("spells", "builds", "rates")},
-                         {"spells": 10, "builds": 20, "rates": 30})
+                          if kind in ("spells", "builds", "rates", "augment_ranks")},
+                         {"spells": 10, "builds": 20, "rates": 30, "augment_ranks": 40})
 
 
     def test_catalog_handoff_is_published_by_polling_thread_before_new_offers(self):

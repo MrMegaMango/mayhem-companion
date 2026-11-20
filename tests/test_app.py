@@ -47,7 +47,12 @@ class StateTests(unittest.TestCase):
         app.game_live = True
         app.game_status = "live"
         app.last_active_status = "live"
-        app.champ_select = app.champion_preview = False
+        app.champ_select = app.champion_preview = app.game_loading = False
+        app.rank_token = 0
+        app.rank_champion = "157"
+        app.rank_data = app.rank_error = None
+        app.rank_pending = False
+        app.rankings_panel = Mock()
         app.switch_view = Mock()
         app.fit_window = Mock()
         app.token = 5
@@ -917,6 +922,7 @@ class StateTests(unittest.TestCase):
         app.lookup()
         self.assertEqual(app.requests.get_nowait(), ("spells", (8, "41")))
         self.assertEqual(app.requests.get_nowait(), ("builds", (10, "41")))
+        self.assertEqual(app.requests.get_nowait(), ("augment_ranks", (app.rank_token, "41")))
         app.lookup()
         self.assertTrue(app.requests.empty())
 
@@ -1350,6 +1356,81 @@ class StateTests(unittest.TestCase):
         app.handle_game({"status": "waiting", "phase": "EndOfGame"})
         app.handle_game({"status": "live", "champion_name": "Yasuo"})
         app.switch_view.assert_called_once_with("builds", automatic=True)
+
+    def test_loading_keeps_champion_and_opens_rankings(self):
+        app = self.make_view()
+        app.rank_champion = app.spell_champion = app.build_champion = None
+        app.handle_game({"status": "loading", "phase": "GameStart", "is_aram": True,
+                         "champion_id": 157, "summoner_spells": [4, 32]})
+        self.assertEqual(app.champion, "157")
+        self.assertTrue(app.game_loading)
+        self.assertFalse(app.game_live)
+        app.switch_view.assert_called_once_with("rankings", automatic=True)
+        app.badge.configure.assert_called_with(text="LOADING", fg=ACCENT)
+        self.assertTrue(app.auto_visible)
+        self.assertEqual(list(app.requests.queue)[0], ("augment_ranks", (app.rank_token, "157")))
+
+    def test_select_preloads_rankings_and_loading_reuses_snapshot(self):
+        app = self.make_view()
+        app.rank_champion = None
+        app.handle_game({"status": "champ_select", "is_aram": True, "champion_id": 157})
+        token = app.rank_token
+        requests = [entry for entry in list(app.requests.queue) if entry[0] == "augment_ranks"]
+        self.assertEqual(requests, [("augment_ranks", (token, "157"))])
+        data = {"champion_id": "157", "rows": [], "source": "ARAMKit"}
+        app.handle_event("augment_ranks", (token, data))
+        app.handle_game({"status": "loading", "phase": "GameStart", "is_aram": True, "champion_id": 157})
+        self.assertIs(app.rank_data, data)
+        self.assertEqual(app.rank_token, token)
+        self.assertEqual(len([e for e in list(app.requests.queue) if e[0] == "augment_ranks"]), 1)
+
+    def test_loading_poll_preserves_manual_navigation_then_live_opens_builds(self):
+        app = self.make_view()
+        loading = {"status": "loading", "phase": "InProgress", "is_aram": True, "champion_id": 157}
+        app.handle_game(loading)
+        app.switch_view.reset_mock()
+        app.view_automatic = False
+        app.view.get.return_value = "spells"
+        app.handle_game(loading)
+        app.switch_view.assert_not_called()
+        app.handle_game({"status": "live", "phase": "InProgress", "is_aram": True, "champion_id": 157})
+        self.assertFalse(app.game_loading)
+        app.switch_view.assert_called_once_with("builds", automatic=True)
+
+    def test_rank_results_cannot_cross_champion_or_token(self):
+        app = self.make_view()
+        app.rank_data = None
+        app.handle_event("augment_ranks", (app.rank_token, {"champion_id": "63", "rows": []}))
+        app.handle_event("augment_ranks", (app.rank_token - 1, {"champion_id": "157", "rows": []}))
+        self.assertIsNone(app.rank_data)
+        app.rankings_panel.set_data.assert_not_called()
+        app.champion = "63"
+        app.lookup_augment_ranks()
+        self.assertIsNone(app.rank_data)
+        app.handle_event("augment_ranks", (app.rank_token - 1, {"champion_id": "157", "rows": []}))
+        self.assertIsNone(app.rank_data)
+
+    def test_background_rankings_cannot_replace_visible_source_period(self):
+        app = self.make_view()
+        metadata = {"source": "ARAMKit", "version": "16.21", "data_date": "2026-10-30"}
+        app.update_source(metadata)
+        app.handle_event("augment_ranks", (app.rank_token, {
+            "champion_id": "157", "rows": [], "data_date": "2026-11-04"}))
+        self.assertIs(app.period_metadata, metadata)
+        app.rankings_panel.set_data.assert_not_called()
+
+    def test_rank_failure_and_retry_clear_stale_data(self):
+        app = self.make_view()
+        app.view.get.return_value = "rankings"
+        app.rank_pending = True
+        app.handle_event("augment_ranks_error", (app.rank_token, "Offline", True))
+        self.assertFalse(app.rank_pending)
+        app.rankings_panel.set_error.assert_called_with("Offline")
+        app.lookup_augment_ranks(force=True)
+        self.assertTrue(app.rank_pending)
+        self.assertIsNone(app.rank_error)
+        self.assertIsNone(app.rank_data)
+        self.assertIn(("augment_ranks", (app.rank_token, "157")), list(app.requests.queue))
 
 
 if __name__ == "__main__":

@@ -455,6 +455,17 @@ def _item_icon_url(value: object) -> str | None:
     return prefix + path
 
 
+def _augment_icon_url(value: object, augment_id: str) -> str | None:
+    """Only accept the named augment's content-addressed ARAMKit artwork."""
+    if not isinstance(value, str):
+        return None
+    prefix = f"{DATA_BASE}/"
+    path = value[len(prefix):] if value.startswith(prefix) else value
+    if not re.fullmatch(rf"assets/augment/{augment_id}-[0-9a-f]{{12}}\.webp", path):
+        return None
+    return prefix + path
+
+
 def _named_item_builds(groups: list[dict], resources: dict) -> list[dict]:
     groups = copy.deepcopy(groups)
     for group in groups:
@@ -790,6 +801,46 @@ class StatsProvider:
             "missing": row is None or count == 0,
             "low_sample": count < 200,
             "source_url": self.source_url(champion_id),
+        }
+
+    def augment_ranks_for(self, champion_id: object, bracket: str = "all") -> dict:
+        """Rank one champion's observed augments from one coherent snapshot.
+
+        All rows share the same champion detail and augment-resource version.
+        Zero-sample observations are omitted; global augment rates never fill
+        missing champion data. The view may filter low samples without a fetch.
+        """
+        champion_id = _identifier(champion_id)
+        detail = self.champion_detail(champion_id, bracket)
+        key = (champion_id, bracket)
+        version = self._details[key]["version"]
+        metadata = dict(self._detail_meta[key])
+        observations = [row for row in detail["augments"]["all"] if row["sampleCount"] > 0]
+        rows = []
+        if observations:
+            resources, stale = self._fetch(self._resource_url(version, "augments"), _catalog_resource)
+            metadata["stale"] = metadata["stale"] or stale
+            for observation in observations:
+                ident = str(observation["id"])
+                resource = resources.get(ident, {})
+                name = resource.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise DataUnavailableError("ARAMKit augment names do not match the statistics")
+                count = observation["sampleCount"]
+                rarity = resource.get("rarity")
+                rows.append({
+                    "id": ident, "augment_id": ident, "name": name,
+                    "win_rate": float(observation["winRate"]), "sample_count": count,
+                    "low_sample": count < 200,
+                    "rarity": rarity if rarity in ("silver", "gold", "prismatic") else None,
+                    "tier": observation.get("tier"), "rank": observation.get("rank"),
+                    "icon_url": _augment_icon_url(resource.get("icon"), ident),
+                })
+        rows.sort(key=lambda row: (-row["win_rate"], -row["sample_count"], row["name"].casefold()))
+        return {
+            **metadata, "champion_id": champion_id, "scope": "champion",
+            "stage": None, "bracket": bracket, "source_url": self.source_url(champion_id),
+            "rows": rows,
         }
 
     def _last_summoner_pairs(self, champion_id: str, bracket: str) -> tuple[list[dict], dict] | None:

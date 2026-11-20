@@ -5,7 +5,8 @@ The client supplies the schema through ``/help?format=Full``: a session's
 ``championPickIntent``, and ``spell1Id``/``spell2Id`` are numeric IDs. The LCU
 is an unsupported Riot interface, so missing or changed data fails closed.
 
-Only five GET endpoints are allowed at runtime. Two small champion-ID resources
+Only six GET endpoints are allowed at runtime. The current-summoner resource
+is used only to match the local player while a supported match starts. Two small champion-ID resources
 are read only when ARAM champion cards or bench choices need them. Authentication
 remains in memory for the current poll; no credentials, player identifiers, or rosters
 are returned or logged. A pick intent is a preview, not a confirmed champion.
@@ -33,8 +34,9 @@ _GAMEFLOW_PATH = "/lol-gameflow/v1/session"
 _SESSION_PATH = "/lol-champ-select/v1/session"
 _PICKABLE_PATH = "/lol-champ-select/v1/pickable-champion-ids"
 _SUBSET_PATH = "/lol-lobby-team-builder/champ-select/v1/subset-champion-list"
+_SUMMONER_PATH = "/lol-summoner/v1/current-summoner"
 _ALLOWED_PATHS = frozenset((_PHASE_PATH, _GAMEFLOW_PATH, _SESSION_PATH,
-                          _PICKABLE_PATH, _SUBSET_PATH))
+                          _PICKABLE_PATH, _SUBSET_PATH, _SUMMONER_PATH))
 _ACTIVE_PHASES = frozenset(("ChampSelect", "GameStart", "InProgress", "Reconnect"))
 _KNOWN_PHASES = frozenset((
     "None", "Lobby", "Matchmaking", "ReadyCheck", "ChampSelect", "GameStart",
@@ -427,6 +429,9 @@ class ClientReader:
         self._next_discovery = 0.0
         self._needs_discovery = False
         self._opener = _local_opener()
+        self.game_generation = 0
+        self._game_id = None
+        self._local_puuid = None
 
     def _credentials(self) -> _Credentials | None:
         now = time.monotonic()
@@ -450,15 +455,74 @@ class ClientReader:
                 return credentials
         return None
 
+    def _reset_game(self):
+        if self._game_id is not None:
+            self.game_generation += 1
+        self._game_id = self._local_puuid = None
+
+    def _observe_game(self, gameflow):
+        game = gameflow.get("gameData") if isinstance(gameflow, Mapping) else None
+        ident = game.get("gameId") if isinstance(game, Mapping) else None
+        ident = ident if type(ident) is int and 0 < ident < 2**64 else None
+        if ident is None:
+            self._local_puuid = None
+            return
+        if ident != self._game_id:
+            self.game_generation += 1
+            self._game_id, self._local_puuid = ident, None
+
+    def _loading_state(self, context, gameflow, phase, read_summoner):
+        result = _client_state("waiting", "League game active.", phase)
+        # These fields were verified in the running client's /help schema and
+        # gameflow response. Resolve the current user's exact PUUID, never a
+        # team's first entry. Identifiers stay in memory and are never emitted.
+        if (not (context.get("is_aram") is True or context.get("is_arena") is True)
+                or not isinstance(gameflow, Mapping) or gameflow.get("phase") != phase
+                or self._game_id is None):
+            return result
+        game = gameflow.get("gameData")
+        if (not isinstance(game, Mapping) or type(game.get("gameId")) is not int
+                or game["gameId"] != self._game_id):
+            return result
+        selections = game.get("playerChampionSelections")
+        if not isinstance(selections, list) or not 1 <= len(selections) <= 32:
+            return result
+        if self._local_puuid is None:
+            try:
+                summoner = read_summoner()
+            except (HTTPError, URLError, OSError, ValueError, TypeError, UnicodeError):
+                return result
+            puuid = summoner.get("puuid") if isinstance(summoner, Mapping) else None
+            if not isinstance(puuid, str) or not puuid.strip() or len(puuid) > 128:
+                return result
+            self._local_puuid = puuid
+        matches = [entry for entry in selections if isinstance(entry, Mapping)
+                   and entry.get("puuid") == self._local_puuid]
+        if len(matches) != 1:
+            return result
+        champion = _positive_id(matches[0].get("championId"))
+        if champion is None:
+            return result
+        result.update(status="loading", champion_id=champion,
+                      message="Waiting for the game to finish loading.")
+        for slot in ("spell1Id", "spell2Id"):
+            identifier = _positive_id(matches[0].get(slot))
+            if identifier is not None:
+                result["summoner_spells"].append({"id": identifier,
+                    "name": _SPELL_NAMES.get(identifier, f"Spell {identifier}"), "raw_name": None})
+        return result
+
     def poll(self, timeout: float = 0.5) -> dict[str, Any]:
         if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or not 0 < timeout <= 10):
             raise ValueError("timeout must be greater than zero and at most 10 seconds")
         credentials = self._credentials()
         if credentials is None:
+            self._local_puuid = None
             self._needs_discovery = True
             return _client_state("waiting", "Waiting for the League client.")
         phase = None
+        gameflow = None
         context = {"is_aram": None, "is_tft": None, "is_arena": None, "game_mode": None}
 
         def finish(result):
@@ -468,9 +532,11 @@ class ClientReader:
         try:
             phase = _get_json(self._opener, credentials, _PHASE_PATH, timeout)
             if not isinstance(phase, str):
+                self._reset_game()
                 return _client_state("error", "The local client returned an unexpected phase.")
             self._needs_discovery = False
             if phase not in _ACTIVE_PHASES:
+                self._reset_game()
                 return _client_state("waiting", "Waiting for champion select.", phase)
             # This resource supplies queue.gameMode for regular and custom
             # games. Read it only while a game is starting or active, and do
@@ -482,19 +548,24 @@ class ClientReader:
                 if isinstance(current_phase, str) and current_phase in _KNOWN_PHASES:
                     phase = current_phase
                 if phase not in _ACTIVE_PHASES:
+                    self._reset_game()
                     return _client_state("waiting", "Waiting for champion select.", phase)
             except (HTTPError, URLError, OSError, ValueError, TypeError, UnicodeError):
-                pass
+                self._local_puuid = None
+            self._observe_game(gameflow)
             # TFT uses the same League client phases, but has no League
             # champion selection or guaranteed Live Client board API.
             if context["is_tft"] is True:
+                self._reset_game()
                 return finish(_client_state("tft", "TFT session detected.", phase))
             if phase != "ChampSelect":
-                return finish(_client_state("waiting", "League game active.", phase))
+                return finish(self._loading_state(context, gameflow, phase,
+                              lambda: _get_json(self._opener, credentials, _SUMMONER_PATH, timeout)))
             session = _get_json(self._opener, credentials, _SESSION_PATH, timeout)
             return finish(_session_state(session, is_aram=context["is_aram"],
                           read_options=lambda path: _get_json(self._opener, credentials, path, timeout)))
         except HTTPError as error:
+            self._local_puuid = None
             if error.code in (401, 403):
                 self._needs_discovery = True
                 return finish(_client_state("waiting", "Waiting for the League client connection.", phase))
@@ -504,7 +575,9 @@ class ClientReader:
                 return finish(_client_state("waiting", "Waiting for champion select.", phase))
             return finish(_client_state("error", "The local client API is temporarily unavailable.", phase))
         except (URLError, OSError):
+            self._local_puuid = None
             self._needs_discovery = True
             return finish(_client_state("waiting", "Waiting for the League client connection.", phase))
         except (ValueError, TypeError, UnicodeError):
+            self._local_puuid = None
             return finish(_client_state("error", "The local client returned an unreadable response.", phase))
