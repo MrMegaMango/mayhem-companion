@@ -212,6 +212,56 @@ class DataPeriodTests(unittest.TestCase):
             self.assertEqual(data_freshness(meta), "")
             self.assertIn("does not publish", data_period_details(meta))
 
+    def test_rolling_window_label_does_not_use_asset_patch_as_match_period(self):
+        for asset_patch in ("16.21", "16.23"):
+            meta = {"source": "Lolalytics", "game_mode": "Arena", "data_window": "30",
+                    "window_days": 30, "version": None, "source_patch": None,
+                    "asset_patch": asset_patch, "fetched_at": "2026-11-27T06:00:00Z"}
+            with self.subTest(asset_patch=asset_patch):
+                self.assertEqual(data_period(meta), "Rolling 30-day sample")
+                details = data_period_details(meta)
+                self.assertIn("can span balance patches", details)
+                self.assertIn("Exact first/last match dates are not published", details)
+                self.assertIn("asset catalog patch identifies names and artwork", details)
+                self.assertNotIn("Patch period", details)
+                self.assertNotIn("Start:", details)
+                self.assertIn("Retrieved 2026-11-27 06:00 UTC", details)
+                self.assertIn("Retrieval is not the latest included match", details)
+
+    def test_cached_rolling_window_retains_snapshot_retrieval_and_is_not_mutated(self):
+        meta = {"source": "Lolalytics", "data_window": "30", "window_days": 30,
+                "asset_patch": "16.23", "fetched_at": "2026-11-20T12:00:00Z", "stale": True}
+        original = copy.deepcopy(meta)
+        for formatter in (data_period, data_period_details, data_freshness):
+            self.assertEqual(formatter(meta), formatter({**meta, "stale": False}))
+        self.assertEqual(data_period(meta), "Rolling 30-day sample")
+        self.assertIn("Retrieved 2026-11-20 12:00 UTC", data_period_details(meta))
+        self.assertEqual(meta, original)
+        self.assertNotIn("sample_start", meta)
+        self.assertNotIn("sample_end", meta)
+
+    def test_rolling_window_without_retrieval_time_does_not_invent_dates(self):
+        meta = {"source": "Lolalytics", "data_window": "30", "window_days": 30,
+                "asset_patch": "16.23", "version": None}
+        self.assertEqual(data_period(meta), "Rolling 30-day sample")
+        self.assertIn("retrieval time is unavailable", data_period_details(meta))
+        self.assertEqual(data_freshness(meta), "")
+        self.assertNotIn("Nov", data_period_details(meta))
+
+    def test_published_match_bounds_still_override_a_rolling_window(self):
+        meta = {"source": "Lolalytics", "data_window": "30", "window_days": 30,
+                "sample_start": "2026-10-28", "sample_end": "2026-11-26"}
+        self.assertEqual(data_period(meta), "Matches 2026-10-28 – 2026-11-26")
+        self.assertIn("source-provided match bounds", data_period_details(meta))
+
+    def test_asset_patch_alone_and_incomplete_window_markers_are_not_match_dates(self):
+        for extra in ({}, {"data_window": "30"}, {"window_days": 30},
+                      {"data_window": "30", "window_days": 7}):
+            meta = {"source": "Lolalytics", "asset_patch": "16.23", "version": None,
+                    "fetched_at": "2026-11-27T06:00:00Z", **extra}
+            with self.subTest(extra=extra):
+                self.assertEqual(data_period(meta), "Match dates not published")
+
     def test_stale_metadata_remains_its_own_snapshot_and_is_not_mutated(self):
         meta = {"source": "ARAMKit", "version": "16.21", "data_date": "2026-10-30", "stale": True}
         original = copy.deepcopy(meta)

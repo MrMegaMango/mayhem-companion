@@ -20,6 +20,9 @@ DDRAGON = {"data": {
 NAMES = _ddragon(DDRAGON)
 URL = INDEX_URL + "/yasuo"
 ALTERNATIVE_URL = "https://lolalytics.com/lol/yasuo/arena/build/?tier=all&patch=16.21"
+ROLLING_URL = "https://lolalytics.com/lol/yasuo/arena/build/?tier=all&patch=30"
+RANKING_URL = "https://lolalytics.com/lol/tierlist/arena/?tier=all&patch=16.21"
+ROLLING_RANKING_URL = "https://lolalytics.com/lol/tierlist/arena/?tier=all&patch=30"
 
 
 def page(body, url=INDEX_URL, version="26.21"):
@@ -71,6 +74,17 @@ def alternative_snapshot(*, augment_samples=(2000,), item_samples=(3000,), versi
                          for i, samples in enumerate(augment_samples)],
             "items": [{"id": str(223031 + i), "win_rate": .52, "sample_count": samples}
                       for i, samples in enumerate(item_samples)]}
+
+
+def ranking_snapshot(*, counts=(20000, 15000), version="16.21", stale=False, window="current"):
+    rows = [{**NAMES[ident], "champion_id": ident, "win_rate": .51, "sample_count": samples,
+             "missing": not bool(samples), "low_sample": samples < 200}
+            for ident, samples in zip(("157", "99"), counts)]
+    return {"source": "Lolalytics", "source_url": ROLLING_RANKING_URL if window == "30" else RANKING_URL,
+            "version": None if window == "30" else version, "source_patch": None if window == "30" else version,
+            "asset_patch": version, "data_window": window, "stale": stale,
+            "sample_label": "Arena · all ranks · all regions", "rows": rows,
+            **({"window_days": 30} if window == "30" else {})}
 
 
 class ArenaParsingTests(unittest.TestCase):
@@ -182,6 +196,9 @@ class ArenaProviderTests(unittest.TestCase):
         self.fallback_patch = patch.object(self.provider, "_fallback_champion", return_value=None)
         self.fallback = self.fallback_patch.start()
         self.addCleanup(self.fallback_patch.stop)
+        self.ranking_patch = patch.object(self.provider, "_ranking_catalog", return_value=None)
+        self.ranking = self.ranking_patch.start()
+        self.addCleanup(self.ranking_patch.stop)
         self.resource = "https://ddragon.leagueoflegends.com/cdn/16.21.1/data/en_US/champion.json"
         self.payloads = {VERSIONS_URL: '["16.21.1"]', self.resource: json.dumps(DDRAGON),
                          INDEX_URL: catalog_html(), URL: detail_html()}
@@ -213,6 +230,7 @@ class ArenaProviderTests(unittest.TestCase):
             self.provider.champion_for("157")
         restarted = ArenaProvider(Path(self.temp.name))
         with patch.object(restarted, "_fallback_champion", return_value=None), \
+                patch.object(restarted, "_ranking_catalog", return_value=None), \
                 patch.object(restarted, "_download", side_effect=AssertionError("unexpected download")):
             self.assertEqual(restarted.champion_for("157")["augments"][0]["win_rate"], .75)
 
@@ -488,7 +506,8 @@ class ArenaProviderTests(unittest.TestCase):
             self.assertEqual(len(self.provider.champion_for("157")["augments"]), 1)
             self.assertEqual(self.calls, [VERSIONS_URL, self.resource, INDEX_URL, URL, ALTERNATIVE_URL])
             restarted = ArenaProvider(Path(self.temp.name))
-            with patch.object(restarted, "_download", side_effect=AssertionError("unexpected download")):
+            with patch.object(restarted, "_ranking_catalog", return_value=None), \
+                    patch.object(restarted, "_download", side_effect=AssertionError("unexpected download")):
                 self.assertEqual(restarted.champion_for("157")["source"], "Lolalytics")
             self.assertEqual(parse.call_args.kwargs["expected_patch"], "26.21")
 
@@ -521,9 +540,171 @@ class ArenaProviderTests(unittest.TestCase):
         restarted = ArenaProvider(Path(self.temp.name))
         self.calls.clear()
         with patch.object(restarted, "_fallback_champion", return_value=None), \
+                patch.object(restarted, "_ranking_catalog", return_value=None), \
                 patch.object(restarted, "_download", side_effect=self.download):
             restarted.champion_for("157")
         self.assertEqual(self.calls, [URL])
+
+    def test_better_covered_rankings_keep_source_rows_and_identity_resources(self):
+        alternative = ranking_snapshot()
+        self.ranking.return_value = alternative
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            result = self.provider.load()
+        self.assertEqual(result["source"], "Lolalytics")
+        self.assertEqual(result["rows"], alternative["rows"])
+        self.assertEqual(result["source_url"], alternative["source_url"])
+        self.assertEqual(set(result["champions"]), {"157", "99"})
+        self.assertEqual(result["champions"]["157"]["slug"], "yasuo")
+        self.assertEqual(result["augments"]["43"]["name"], "Now You See Me")
+        self.assertNotIn("win_rate", result["augments"]["43"])
+        self.assertGreater(len(result["augments"]), 400)
+        self.assertEqual(result["data_window"], "current")
+
+    def test_primary_rankings_win_on_coverage_tie_independent_of_rates(self):
+        alternative = ranking_snapshot(counts=(1240,))
+        alternative["rows"][0]["win_rate"] = 1.
+        self.ranking.return_value = alternative
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.assertEqual(self.provider.load()["source"], "winrate.lol")
+
+    def test_rankings_prefer_supported_rows_over_more_small_samples(self):
+        self.ranking.return_value = ranking_snapshot(counts=(12, 12))
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.assertEqual(self.provider.load()["source"], "winrate.lol")
+
+    def test_rankings_compare_patch_before_sample_coverage(self):
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.ranking.return_value = ranking_snapshot(version="16.20")
+            self.assertEqual(self.provider.load()["source"], "winrate.lol")
+            self.ranking.return_value = ranking_snapshot(version="16.22", counts=())
+            latest = self.provider.load()
+            self.assertEqual(latest["source"], "Lolalytics")
+            self.assertEqual(latest["version"], "16.22")
+            self.assertEqual(latest["rows"], [])
+
+    def test_rankings_keep_fresh_primary_over_larger_stale_alternative(self):
+        self.ranking.return_value = ranking_snapshot(stale=True)
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.assertEqual(self.provider.load()["source"], "winrate.lol")
+
+    def test_rankings_use_fresh_alternative_over_larger_stale_primary(self):
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.provider.load()
+            self.now.return_value = 5000.
+            self.payloads[INDEX_URL] = DataUnavailableError("offline", transient=True)
+            self.ranking.return_value = ranking_snapshot(counts=(1,))
+            result = self.provider.load()
+            self.assertEqual(result["source"], "Lolalytics")
+            self.assertEqual(result["rows"][0]["sample_count"], 1)
+
+    def test_alternative_rankings_work_when_primary_index_fails(self):
+        self.payloads[INDEX_URL] = DataUnavailableError("offline", transient=True)
+        self.ranking.return_value = ranking_snapshot()
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            result = self.provider.load()
+            detail = self.provider.champion_for("157")
+        self.assertEqual(result["source"], "Lolalytics")
+        self.assertEqual(result["champions"], NAMES)
+        self.assertEqual(result["augments"]["41"]["name"], "Goliath")
+        self.assertEqual(detail["champion_id"], "157")
+        self.assertEqual(self.calls.count(INDEX_URL), 1)
+
+    def test_failed_rankings_preserve_original_primary_error(self):
+        error = DataUnavailableError("primary denied")
+        self.payloads[INDEX_URL] = error
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            with self.assertRaises(DataUnavailableError) as raised:
+                self.provider.load()
+        self.assertIs(raised.exception, error)
+
+    def test_rolling_catalog_never_fetches_primary_and_keeps_reference_names(self):
+        self.ranking.return_value = ranking_snapshot(window="30")
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            result = self.provider.load(force=True, window="30")
+        self.assertEqual(self.calls, [VERSIONS_URL, self.resource])
+        self.assertIsNone(result["version"])
+        self.assertEqual(result["window_days"], 30)
+        self.assertEqual(result["champions"], NAMES)
+        self.assertGreater(len(result["augments"]), 400)
+        self.ranking.assert_called_once()
+        self.assertEqual(self.ranking.call_args.args[1], "16.21")
+        self.assertEqual(self.ranking.call_args.kwargs, {"force": True, "window": "30"})
+
+    def test_failed_rolling_rankings_do_not_reuse_current_catalog(self):
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.provider.load()
+            with self.assertRaisesRegex(DataUnavailableError, "30-day champion rankings"):
+                self.provider.load(window="30")
+        self.assertEqual(self.calls.count(INDEX_URL), 1)
+
+    def test_failed_rolling_champion_does_not_reuse_current_statistics(self):
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            self.provider.champion_for("157")
+            before = list(self.calls)
+            self.ranking.return_value = ranking_snapshot(window="30")
+            with self.assertRaisesRegex(DataUnavailableError, "30-day champion statistics"):
+                self.provider.champion_for("157", window="30", force=True)
+        self.assertEqual(self.calls, before)
+        self.assertEqual(self.fallback.call_args.kwargs, {"force": True, "window": "30"})
+
+    def test_rolling_and_current_champion_caches_are_separate(self):
+        self.fallback_patch.stop()
+        self.ranking.side_effect = lambda names, patch, **kw: ranking_snapshot(window=kw["window"])
+        self.payloads.update({ALTERNATIVE_URL: "current page", ROLLING_URL: "rolling page"})
+        def parse(html, champion, url, augments, **kwargs):
+            result = alternative_snapshot()
+            result.update(source_url=url, data_window=kwargs["window"], asset_patch="16.21")
+            if kwargs["window"] == "30":
+                result.update(version=None, source_patch=None, window_days=30)
+                result["summary"]["sample_count"] = 70000
+            return result
+        with patch("mayhem.arena_lolalytics.parse_champion", side_effect=parse) as parser, \
+                patch.object(self.provider, "_download", side_effect=self.download):
+            current = self.provider.champion_for("157")
+            rolling = self.provider.champion_for("157", window="30")
+            self.assertEqual(current["summary"]["sample_count"], 20000)
+            self.assertEqual(rolling["summary"]["sample_count"], 70000)
+            self.assertEqual(rolling["data_window"], "30")
+            self.assertEqual(self.provider.champion_for("157"), current)
+            self.assertEqual(self.provider.champion_for("157", window="30"), rolling)
+            self.assertEqual(self.calls.count(ALTERNATIVE_URL), 1)
+            self.assertEqual(self.calls.count(ROLLING_URL), 1)
+            self.provider.champion_for("157", window="30", force=True)
+            self.assertEqual(self.calls.count(ROLLING_URL), 2)
+            self.assertEqual(self.calls.count(ALTERNATIVE_URL), 1)
+            self.assertEqual(parser.call_args.kwargs["window"], "30")
+
+    def test_real_ranking_catalog_caches_each_window_separately(self):
+        self.ranking_patch.stop()
+        self.payloads.update({RANKING_URL: "current rankings", ROLLING_RANKING_URL: "rolling rankings"})
+        def parse(html, names, url, **kwargs):
+            return ranking_snapshot(window=kwargs["window"])
+        with patch("mayhem.arena_rankings.parse_rankings", side_effect=parse) as parser, \
+                patch.object(self.provider, "_download", side_effect=self.download):
+            current = self.provider.load()
+            rolling = self.provider.load(window="30")
+            self.assertEqual(current["data_window"], "current")
+            self.assertEqual(rolling["data_window"], "30")
+            self.provider.load()
+            self.provider.load(window="30")
+            self.assertEqual(self.calls.count(RANKING_URL), 1)
+            self.assertEqual(self.calls.count(ROLLING_RANKING_URL), 1)
+            self.provider.load(force=True, window="30")
+            self.assertEqual(self.calls.count(ROLLING_RANKING_URL), 2)
+            self.assertEqual(self.calls.count(RANKING_URL), 1)
+            self.assertEqual(parser.call_args.kwargs, {"expected_patch": "16.21", "window": "30"})
+            restarted = ArenaProvider(Path(self.temp.name))
+            with patch.object(restarted, "_download", side_effect=AssertionError("unexpected download")):
+                self.assertEqual(restarted.load(window="30")["data_window"], "30")
+
+    def test_rejected_rolling_ranking_page_never_silently_returns_current(self):
+        self.ranking_patch.stop()
+        self.payloads[ROLLING_RANKING_URL] = "bad rolling rankings"
+        with patch("mayhem.arena_rankings.parse_rankings", side_effect=DataUnavailableError("wrong mode")), \
+                patch.object(self.provider, "_download", side_effect=self.download):
+            with self.assertRaisesRegex(DataUnavailableError, "30-day champion rankings"):
+                self.provider.load(window="30")
+        self.assertNotIn(INDEX_URL, self.calls)
 
     def test_http_failure_classification(self):
         for code, transient in ((403, False), (404, False), (429, True), (503, True)):

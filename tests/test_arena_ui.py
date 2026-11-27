@@ -96,6 +96,68 @@ class ArenaPanelTests(unittest.TestCase):
         self.panel.handle_game(copy.deepcopy(LIVE))
         self.panel.set_champion_data("157", copy.deepcopy(DATA))
 
+    def test_window_control_defaults_to_30_days_and_emits_choice(self):
+        self.assertEqual(self.panel.data_window, "30")
+        self.assertEqual(self.panel.window.get(), "Last 30 days")
+        self.panel.change_window = Mock()
+        self.panel.window.set("Current patch")
+        self.panel.select_window()
+        self.panel.change_window.assert_called_once_with("current")
+        self.panel.set_window("current")
+        self.panel.change_window.reset_mock()
+        self.panel.select_window()
+        self.panel.change_window.assert_not_called()
+
+    def test_switching_window_clears_rates_but_keeps_live_offers_and_identity(self):
+        self.start_live()
+        self.panel.set_offers(copy.deepcopy(OFFERS))
+        self.panel.set_window("current")
+        self.assertEqual(self.panel.champion, "157")
+        self.assertEqual(self.panel.offers, OFFERS)
+        self.assertEqual(self.panel.view.get(), "augments")
+        self.assertIsNone(self.panel.data)
+        self.assertEqual([card[2].cget("text") for card in self.panel.cards[:2]], ["—", "—"])
+        self.assertEqual([card[1].cget("text") for card in self.panel.cards[:2]],
+                         ["Goliath", "Jeweled Gauntlet"])
+        self.assertEqual(self.panel.catalog["augments"], CATALOG["augments"])
+        self.assertFalse(any(metric.get("win_rate") is not None for metric in champion_rows(self.panel.catalog)))
+        self.assertIsNone(self.panel.period_metadata)
+        self.assertIsNone(self.panel.source_url)
+        self.assertEqual(self.panel.window_box.winfo_manager(), "pack")
+        self.panel.set_champion_data("157", copy.deepcopy(DATA))
+        self.assertEqual(self.panel.cards[0][2].cget("text"), "63.0%")
+
+    def test_switching_window_preserves_manual_tab_and_filters(self):
+        self.start_live()
+        self.panel.switch_view("items")
+        self.panel.query.set("Popular")
+        self.panel.sort.set("Games")
+        self.panel.set_window("30")
+        self.assertEqual(self.panel.view.get(), "items")
+        self.assertFalse(self.panel.automatic_view)
+        self.assertEqual(self.panel.query.get(), "Popular")
+        self.assertEqual(self.panel.sort.get(), "Games")
+        self.assertEqual(self.panel.rows, [])
+        self.panel.set_catalog({**copy.deepcopy(CATALOG), "data_window": "30"})
+        self.assertEqual(self.panel.view.get(), "items")
+        self.assertEqual(self.panel.query.get(), "Popular")
+
+    def test_rolling_window_labels_never_present_asset_patch_as_sample_patch(self):
+        self.start_live()
+        data = {**copy.deepcopy(DATA), "data_window": "30", "window_days": 30,
+                "version": None, "asset_patch": "16.23", "patch": "30"}
+        self.panel.set_champion_data("157", data)
+        source = self.panel.source.get()
+        self.assertIn("Last 30 days", source)
+        self.assertIn("multiple patches", source)
+        self.assertNotIn("16.23", source)
+        self.assertNotIn("Patch 30", source)
+        self.assertNotIn(" · 30", source)
+        with patch("mayhem.arena_ui.messagebox.showinfo") as dialog:
+            self.panel.about_rates()
+        self.assertIn("multiple balance patches", dialog.call_args.args[1])
+        self.assertIn("Current patch", dialog.call_args.args[1])
+
     def test_catalog_ranking_table_has_rates_and_unobserved_champions(self):
         self.panel.set_catalog(copy.deepcopy(CATALOG))
         self.assertEqual([row["id"] for row in self.panel.rows], ["63", "157", "99"])

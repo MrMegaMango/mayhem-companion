@@ -216,6 +216,8 @@ def data_period(meta, *, editorial=False) -> str:
         return f"Expert tiers · edited {_day_text(_day(edited))}" if edited else "Expert guidance · no match sample"
     if "sample_start" in meta or "sample_end" in meta:
         return _sample(meta)
+    if meta.get("data_window") == "30" and meta.get("window_days") == 30:
+        return "Rolling 30-day sample"
     estimated = _estimated_period(meta)
     if not estimated:
         return "Match dates not published"
@@ -235,6 +237,12 @@ def data_period_details(meta, *, editorial=False) -> str:
         if sample == "Match dates not published":
             return "The supplied match bounds are invalid or ambiguous; no period is inferred from them."
         return f"{sample}. These are source-provided match bounds; any missing endpoint remains unknown. Timestamps are normalized to UTC. Date-only bounds retain the source's day precision; its timezone is not published."
+    if meta.get("data_window") == "30" and meta.get("window_days") == 30:
+        freshness = data_freshness(meta)
+        return ("The source selected its last 30 days of Arena observations. This rolling sample can span balance patches; "
+                "it is not a current-patch-only sample. Exact first/last match dates are not published. "
+                "The asset catalog patch identifies names and artwork, not the match period. "
+                + (freshness + ". Retrieval is not the latest included match." if freshness else "The snapshot retrieval time is unavailable."))
     estimated = _estimated_period(meta)
     if not estimated:
         return "The source does not publish first/last match dates. This snapshot also lacks a valid, ordered patch-start and snapshot-date pair for a calendar estimate."

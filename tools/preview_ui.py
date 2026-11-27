@@ -127,6 +127,7 @@ def preview_class():
             self.catalog = provider.load_catalog()
             self.follow = self.view_automatic = True
             self.game_status, self.display_mode = "waiting", "aram"
+            self.arena_window = "current"  # Existing cached examples use one patch.
             self.offer_ids = [None] * 3
             self.cards, self.build_cards, self.augment_names, self.champion_names, self.live_spells = [], [], [], [], []
             self.augment_by_name, self.item_images, self.last_game_context = {}, {}, {}

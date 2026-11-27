@@ -203,7 +203,7 @@ def _page(html, url):
 def _metadata(version, url):
     return {
         "source": "winrate.lol", "source_url": url, "game_mode": "Arena",
-        "version": version, "data_date": None, "stale": False,
+        "version": version, "data_window": "current", "data_date": None, "stale": False,
         "win_rate_label": "Win rate",
         "rate_note": "Source win rate; finish cutoff not specified. Items are individual, not full builds.",
         "sample_label": "Arena · source sample (rank/region unspecified)",
@@ -386,6 +386,33 @@ def _preferred_snapshot(primary, alternative):
     return alternative if alternative_coverage > primary_coverage else primary
 
 
+def _preferred_rankings(primary, alternative):
+    """Select a complete champion ranking table, keeping its source metadata."""
+    if primary is None:
+        return alternative
+    if alternative is None:
+        return primary
+    from .arena_lolalytics import _patch
+    left, right = _patch(primary["version"]), _patch(alternative["version"])
+    if left != right:
+        return alternative if right > left else primary
+
+    def coverage(catalog):
+        rows = [row for row in catalog.get("rows", [])
+                if row.get("win_rate") is not None and row.get("sample_count", 0) > 0]
+        return (sum(row["sample_count"] >= 200 for row in rows), len(rows),
+                sum(min(row["sample_count"], 20000) for row in rows))
+
+    left, right = coverage(primary), coverage(alternative)
+    if not right[1]:
+        return primary
+    if not left[1]:
+        return alternative
+    if bool(primary.get("stale")) != bool(alternative.get("stale")):
+        return alternative if primary.get("stale") else primary
+    return alternative if right > left else primary
+
+
 class ArenaProvider:
     """One-thread owner; bounded downloads, one-hour snapshots and short retries."""
     def __init__(self, cache_dir):
@@ -491,8 +518,20 @@ class ArenaProvider:
             raise _error("invalid Data Dragon version")
         return versions[0]
 
-    def load(self, force=False):
+    def _ranking_catalog(self, champions, patch, *, force=False, window="current"):
+        from .arena_rankings import ranking_url, parse_rankings
+        try:
+            url = ranking_url(patch, window=window)
+            return self._get(url, lambda html: parse_rankings(
+                html, champions, url, expected_patch=patch, window=window), force=force)
+        except DataUnavailableError:
+            return None
+
+    def load(self, force=False, *, window="current"):
+        if window not in ("current", "30"):
+            raise ValueError("Unsupported Arena data window")
         version = self._get(VERSIONS_URL, self._versions, force=force, ttl=86400)
+        asset_patch = version.rsplit(".", 1)[0]
         resource_url = f"https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/champion.json"
         def champions(content):
             try:
@@ -500,19 +539,39 @@ class ArenaProvider:
             except (ValueError, TypeError) as exc:
                 raise _error("invalid Data Dragon champions") from exc
         names = self._get(resource_url, champions, ttl=86400)
-        self._catalog = self._get(INDEX_URL, lambda html: parse_catalog(html, names), force=force)
+        primary, primary_error = None, None
+        if window == "current":
+            try:
+                primary = self._get(INDEX_URL, lambda html: parse_catalog(html, names), force=force)
+            except DataUnavailableError as exc:
+                primary_error = exc
+        alternative = self._ranking_catalog(names, asset_patch, force=force, window=window)
+        selected = alternative if window == "30" else _preferred_rankings(primary, alternative)
+        if selected is None:
+            if primary_error is not None:
+                raise primary_error
+            raise _error("30-day champion rankings are unavailable; retry or choose Current patch")
         reference = _reference_names()
-        if reference:
-            self._catalog["augments"] = _merge_names(self._catalog["augments"], reference)
-            self._catalog["catalog_note"] = "Riot 16.21 English reference names; champion rates come only from the Arena source."
+        observed = (primary or {}).get("augments", {})
+        self._catalog = {**selected, "data_window": window,
+                         "asset_patch": selected.get("asset_patch") or asset_patch,
+                         "champions": (primary or {}).get("champions", names),
+                         "augments": _merge_names(observed, reference),
+                         "catalog_note": "Riot English reference names; statistics use the labeled source and sample window."}
         return copy.deepcopy(self._catalog)
 
-    def champion_for(self, champion_id, force=False):
+    def champion_for(self, champion_id, force=False, *, window="current"):
         ident = _id(champion_id)
-        catalog = self.load()
+        catalog = self.load(window=window)
         champion = catalog["champions"].get(ident)
         if champion is None:
             raise _error("unknown champion")
+        if window == "30":
+            # A selected rolling window never silently becomes current-patch data.
+            snapshot = self._fallback_champion(champion, catalog, force=force, window=window)
+            if snapshot is None:
+                raise _error("30-day champion statistics are unavailable; retry or choose Current patch")
+            return snapshot
         slug = champion.get("slug")
         if not slug:
             # The index omits some low-sample champions even when their detail
@@ -537,15 +596,16 @@ class ArenaProvider:
         alternative = self._fallback_champion(champion, catalog, force=force)
         return _preferred_snapshot(data, alternative)
 
-    def _fallback_champion(self, champion, catalog, *, force=False):
+    def _fallback_champion(self, champion, catalog, *, force=False, window="current"):
         # A complete snapshot keeps each row and its metadata on one source.
         # Do not fill gaps with global augment rates or another champion's data.
         from .arena_lolalytics import champion_url, parse_champion as parse_fallback
         try:
-            url = champion_url(champion, catalog["version"])
+            patch = catalog.get("version") or catalog["asset_patch"]
+            url = champion_url(champion, patch, window=window)
             return self._get(
                 url, lambda html: parse_fallback(html, champion, url, catalog["augments"],
-                                                expected_patch=catalog["version"]),
+                                                expected_patch=patch, window=window),
                 force=force,
             )
         except DataUnavailableError:

@@ -27,7 +27,7 @@ from .icons import IconLoader
 from .tft_ui import TftPanel
 from .champion_choices import ChampionChoicesPanel
 from .augment_rankings import AugmentRankingsPanel
-from .arena_ui import ArenaPanel
+from .arena_ui import ArenaPanel, normalize_window
 from . import __version__
 from .feedback import (FEEDBACK_EMAIL, build_report, email_draft, feedback_mode,
                        open_email_draft, technical_details)
@@ -132,6 +132,7 @@ class Companion:
         self.arena_token = self.arena_champion_token = 0
         self.arena_champion = None
         self.arena_pending = False
+        self.arena_window = normalize_window(self.settings.get("arena_window"))
         self.build()
         self.analytics = Analytics(self.storage, load_analytics_endpoint(), __version__)
         self.icons = IconLoader(self.events, self.stop, self.storage / "cache" / "icons")
@@ -309,7 +310,8 @@ class Companion:
                                       on_resize=lambda: self.root.after_idle(self.fit_window),
                                       request_icon=self.request_tft_icon, scan_variable=self.auto,
                                       change_scan=self.change_scan,
-                                      request_scan=lambda: self.requests.put(("scan", None)))
+                                      request_scan=lambda: self.requests.put(("scan", None)),
+                                      window=self.arena_window, change_window=self.change_arena_window)
         root.update_idletasks()
         x, y, height = self.panel_placement(self.shell.winfo_reqheight(), (x, y))
         root.geometry(f"440x{height}+{x}+{y}")
@@ -385,13 +387,30 @@ class Companion:
         self.arena_token += 1
         self.arena_pending = True
         self.arena_panel.set_loading()
-        self.requests.put(("arena", (self.arena_token, force)))
+        self.requests.put(("arena", (self.arena_token, force, getattr(self, "arena_window", "current"))))
 
     def load_arena_champion(self, champion, force=False):
         self.arena_champion_token += 1
         self.arena_champion = str(champion) if champion is not None else None
         if self.arena_champion is not None:
-            self.requests.put(("arena_champion", (self.arena_champion_token, self.arena_champion, force)))
+            self.requests.put(("arena_champion", (self.arena_champion_token, self.arena_champion, force,
+                                                   getattr(self, "arena_window", "current"))))
+
+    def change_arena_window(self, window):
+        if window not in ("30", "current") or window == getattr(self, "arena_window", "current"):
+            return
+        self.arena_window = window
+        self.settings["arena_window"] = window
+        try:
+            self.settings_path.write_text(json.dumps(self.settings), encoding="utf-8")
+        except OSError:
+            logging.warning("Could not save the Arena data window")
+        # Release the pending flag and invalidate both generations. Old replies
+        # may finish in the background, but cannot repopulate the cleared view.
+        self.arena_pending = False
+        self.arena_panel.set_window(window)
+        self.load_arena()
+        self.load_arena_champion(self.arena_champion)
 
     def set_game_mode(self, mode):
         if mode == self.display_mode:
@@ -1313,7 +1332,10 @@ class Companion:
             token, data = payload
             if token == self.arena_token:
                 self.arena_pending = False
-                self.arena_panel.set_catalog(data)
+                if data.get("data_window", "current") == getattr(self, "arena_window", "current"):
+                    self.arena_panel.set_catalog(data)
+                else:
+                    self.arena_panel.set_error("Arena data returned a different period. Retry data to try again.")
         elif kind == "arena_error":
             token, error = payload
             if token == self.arena_token:
@@ -1322,7 +1344,8 @@ class Companion:
         elif kind == "arena_champion":
             token, champion, data = payload
             if (token == self.arena_champion_token and str(champion) == self.arena_champion
-                    and str(data.get("champion_id")) == self.arena_champion):
+                    and str(data.get("champion_id")) == self.arena_champion
+                    and data.get("data_window", "current") == getattr(self, "arena_window", "current")):
                 self.arena_panel.set_champion_data(champion, data)
         elif kind == "arena_champion_error":
             token, champion, error = payload

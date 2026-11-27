@@ -123,6 +123,32 @@ class ArenaWorkerTests(unittest.TestCase):
         self.aram.rate_for.assert_not_called()
         self.aram.item_builds_for.assert_not_called()
 
+    def test_selected_window_reaches_provider_and_preserves_response_tokens(self):
+        worker, events = self.make_worker()
+        catalog = {**CATALOG, "data_window": "30"}
+        data = {"champion_id": "157", "data_window": "30", "augments": []}
+        self.arena.load.return_value = catalog
+        self.arena.champion_for.return_value = data
+        worker.perform_arena_task("arena", (8, False, "30"))
+        worker.perform_arena_task("arena_champion", (14, "157", True, "30"))
+        self.arena.load.assert_called_once_with(force=False, window="30")
+        self.arena.champion_for.assert_called_once_with("157", force=True, window="30")
+        worker.publish_catalogs()
+        self.assertIn(("arena", (8, catalog)), list(events.queue))
+        self.assertIn(("arena_champion", (14, "157", data)), list(events.queue))
+        self.assertEqual(worker.arena_catalog_token, 8)
+
+    def test_selected_window_errors_keep_catalog_and_champion_generations(self):
+        worker, events = self.make_worker()
+        self.arena.load.side_effect = ValueError("30-day source unavailable")
+        self.arena.champion_for.side_effect = ValueError("30-day champion unavailable")
+        worker.perform_arena_task("arena", (8, True, "30"))
+        worker.perform_arena_task("arena_champion", (14, "157", True, "30"))
+        self.assertEqual(list(events.queue), [
+            ("arena_error", (8, "30-day source unavailable")),
+            ("arena_champion_error", (14, "157", "30-day champion unavailable")),
+        ])
+
     def test_catalog_error_is_separate_from_champion_error(self):
         worker, events = self.make_worker()
         self.arena.load.side_effect = ValueError("Catalog unavailable")

@@ -12,6 +12,13 @@ from .data_timing import data_period, data_period_details
 from .theme import BG, PANEL, FIELD, TEXT, MUTED, ACCENT, AMBER, BORDER
 
 
+WINDOW_LABELS = {"30": "Last 30 days", "current": "Current patch"}
+
+
+def normalize_window(value):
+    return value if isinstance(value, str) and value in WINDOW_LABELS else "30"
+
+
 def number(value):
     return value if type(value) in (int, float) and math.isfinite(value) else None
 
@@ -63,12 +70,16 @@ def champion_rows(catalog):
 
 class ArenaPanel(tk.Frame):
     def __init__(self, parent, request_catalog, request_champion, *, on_resize=None,
-                 request_icon=None, scan_variable=None, change_scan=None, request_scan=None):
+                 request_icon=None, scan_variable=None, change_scan=None, request_scan=None,
+                 window="30", change_window=None):
         super().__init__(parent, bg=BG)
         self.request_catalog, self.request_champion = request_catalog, request_champion
         self.on_resize = on_resize or (lambda: None)
         self.request_icon = request_icon or (lambda url: None)
         self.request_scan = request_scan or (lambda: None)
+        self.change_window = change_window or self.set_window
+        self.data_window = normalize_window(window)
+        self.window = tk.StringVar(value=WINDOW_LABELS[self.data_window])
         self.catalog = self.data = None
         self.champion = self.live_champion = None
         self.follow = True
@@ -90,12 +101,16 @@ class ArenaPanel(tk.Frame):
         self.variant = tk.StringVar()
         row = tk.Frame(self, bg=BG)
         row.pack(fill="x", pady=(0, 12))
-        self.champion_box = ttk.Combobox(row, textvariable=self.champion_name, font=("Segoe UI", 16, "bold"), width=19)
+        self.champion_box = ttk.Combobox(row, textvariable=self.champion_name, font=("Segoe UI", 16, "bold"), width=13)
         self.champion_box.pack(side="left", fill="x", expand=True)
         self.champion_box.bind("<<ComboboxSelected>>", self.select_champion)
         self.champion_box.bind("<Return>", self.select_champion)
         self.champion_box.bind("<KeyRelease>", self.filter_champions)
         self.button(row, "Auto", self.follow_game).pack(side="right", padx=(6, 0))
+        self.window_box = ttk.Combobox(row, textvariable=self.window, state="readonly", width=13,
+                                      values=list(WINDOW_LABELS.values()))
+        self.window_box.pack(side="right", padx=(6, 0))
+        self.window_box.bind("<<ComboboxSelected>>", self.select_window)
         tabs = tk.Frame(self, bg=PANEL, padx=3, pady=3)
         tabs.pack(fill="x", pady=(0, 12))
         self.tabs = {}
@@ -198,6 +213,28 @@ class ArenaPanel(tk.Frame):
         return tk.Button(parent, text=text, command=command, bg=FIELD, fg=TEXT, bd=0,
                          activebackground=BORDER, activeforeground=TEXT, padx=10, pady=8,
                          font=("Segoe UI", 10), cursor="hand2", highlightthickness=0)
+
+    def select_window(self, _event=None):
+        window = next((key for key, label in WINDOW_LABELS.items() if label == self.window.get()), None)
+        if window is not None and window != self.data_window:
+            self.change_window(window)
+
+    def set_window(self, window):
+        """Clear observations immediately while preserving selection and OCR names."""
+        self.data_window = normalize_window(window)
+        self.window.set(WINDOW_LABELS[self.data_window])
+        if self.catalog is not None:
+            identity_keys = ("id", "champion_id", "name", "raw_name", "riotId", "icon_url", "slug")
+            self.catalog = {
+                "champions": {key: {field: value for field, value in row.items() if field in identity_keys}
+                              for key, row in self.catalog.get("champions", {}).items()},
+                "augments": self.catalog.get("augments", {}),
+                "catalog_note": self.catalog.get("catalog_note", ""),
+                "data_window": self.data_window, "_window_loading": True,
+            }
+        self.data = None
+        self.set_loading()
+        self.render()
 
     def set_loading(self):
         self.message.set("Loading Arena data…")
@@ -337,14 +374,19 @@ class ArenaPanel(tk.Frame):
         sample = str(data.get("sample_label") or "Arena")
         if sample not in bits:
             bits.append(sample)
-        for key in ("version", "patch", "queue", "rank"):
+        rolling = data.get("data_window") == "30"
+        if rolling:
+            for text in ("Last 30 days", "multiple patches"):
+                if not any(text.casefold() in bit.casefold() for bit in bits):
+                    bits.append(text)
+        for key in (("queue", "rank") if rolling else ("version", "patch", "queue", "rank")):
             if data.get(key) and str(data[key]) not in bits:
                 bits.append(str(data[key]))
         if data.get("stale"):
             bits.append("CACHED")
         self.source.set(" · ".join(bits))
         displayed = self.catalog if self.view.get() == "champions" else self.data
-        self.set_period(displayed)
+        self.set_period(displayed if not (displayed or {}).get("_window_loading") else None)
         self.source_url = data.get("source_url")
         self.tree.heading("win", text=label)
         return label
@@ -366,6 +408,9 @@ class ArenaPanel(tk.Frame):
                    data_period_details(data)]
         if data.get("sample_label"):
             details.append(str(data["sample_label"]))
+        if data.get("data_window") == "30":
+            details.append("Last 30 days includes matches from multiple balance patches. "
+                           "Choose Current patch to restrict statistics to the current balance version.")
         if (self.catalog or {}).get("catalog_note"):
             details.append(str(self.catalog["catalog_note"]))
         if data.get("fetched_at"):

@@ -91,10 +91,14 @@ class Worker(threading.Thread):
             if self.arena_provider is None:
                 self.arena_provider = ArenaProvider(self.cache)
             if task == "arena":
-                self.arena_catalog_results.put((payload[0], self.arena_provider.load(force=payload[1])))
+                token, force = payload[:2]
+                options = {"window": payload[2]} if len(payload) > 2 else {}
+                self.arena_catalog_results.put((token, self.arena_provider.load(force=force, **options)))
             else:
-                token, champion, force = payload
-                self.emit("arena_champion", (token, champion, self.arena_provider.champion_for(champion, force=force)))
+                token, champion, force = payload[:3]
+                options = {"window": payload[3]} if len(payload) > 3 else {}
+                self.emit("arena_champion", (token, champion,
+                          self.arena_provider.champion_for(champion, force=force, **options)))
         except Exception as exc:
             if task == "arena":
                 self.emit("arena_error", (payload[0], str(exc)))

@@ -196,7 +196,14 @@ def _verified_reference_entries(source_augments, references, reference_ids):
     return recovered
 
 
-def _route(url):
+def _window(window):
+    if window not in ("current", "30"):
+        raise _error("unsupported data window")
+    return window
+
+
+def _route(url, *, window="current"):
+    _window(window)
     if not isinstance(url, str):
         raise _error("invalid source URL")
     parsed = urlsplit(url)
@@ -207,13 +214,17 @@ def _route(url):
     if (query.get("tier") != ["all"] or any(key not in ("tier", "patch") for key in query)
             or ("patch" in query and len(query["patch"]) != 1)):
         raise _error("unexpected source filters")
-    if "patch" in query:
+    if window == "30":
+        if query.get("patch") != ["30"]:
+            raise _error("wrong rolling window URL")
+    elif "patch" in query:
         _patch(query["patch"][0])
     return parsed.path, query.get("patch", [None])[0]
 
 
-def champion_url(champion, patch):
-    """Build a fixed-origin all-ranks page URL from Riot's internal name."""
+def champion_url(champion, patch, *, window="current"):
+    """Build a fixed-origin all-ranks page URL for a patch or rolling window."""
+    _window(window)
     if not isinstance(champion, dict):
         raise _error("invalid champion")
     ident = str(champion.get("id", ""))
@@ -222,26 +233,31 @@ def champion_url(champion, patch):
             or not re.fullmatch(r"[A-Za-z0-9]{1,40}", raw)):
         raise _error("invalid champion route")
     route = "wukong" if ident == "62" and raw == "MonkeyKing" else raw.lower()
-    major, minor = _patch(patch)
-    internal = 16 if major == 26 else major
-    return f"https://lolalytics.com/lol/{route}/arena/build/?tier=all&patch={internal}.{minor}"
+    if window == "30":
+        period = "30"
+    else:
+        major, minor = _patch(patch)
+        internal = 16 if major == 26 else major
+        period = f"{internal}.{minor}"
+    return f"https://lolalytics.com/lol/{route}/arena/build/?tier=all&patch={period}"
 
 
-def parse_champion(html, champion, url, augment_catalog, *, expected_patch=None):
+def parse_champion(html, champion, url, augment_catalog, *, expected_patch=None, window="current"):
     """Return the ArenaProvider champion schema from one public HTML response.
 
     ``augment_catalog`` is the caller's ID-to-name Arena reference dictionary.
     Unsupported names are omitted, never matched through numeric coincidences.
     A source patch expressed as 16.x is equivalent only to public patch 26.x.
+    Rolling samples retain their window separately from the asset catalog patch.
     """
     if not isinstance(html, str) or len(html.encode("utf-8")) > MAX_BYTES:
         raise _error("invalid HTML response")
-    path, requested_patch = _route(url)
+    path, requested_patch = _route(url, window=window)
     try:
         page = _Page(html)
         if len(page.scripts) != 1 or len(page.canonicals) != 1:
             raise _error("missing or ambiguous page snapshot")
-        canonical_path, canonical_patch = _route(page.canonicals[0])
+        canonical_path, canonical_patch = _route(page.canonicals[0], window=window)
         if canonical_path != path:
             raise _error("canonical belongs to another champion or mode")
         snapshot = json.loads(page.scripts[0], object_pairs_hook=_pairs,
@@ -258,12 +274,19 @@ def parse_champion(html, champion, url, augment_catalog, *, expected_patch=None)
         if (str(nav["cid"]) != str(champion["id"]) or type(nav["cid"]) is not int
                 or _name(nav["champName"]) != champion["name"]):
             raise _error("wrong champion response")
-        source_patch = _patch(nav["patch"])
-        for expected in (expected_patch, requested_patch, canonical_patch):
-            if expected is not None and _patch(expected) != source_patch:
-                raise _error("wrong patch response")
+        if window == "30":
+            if nav["patch"] != "30":
+                raise _error("wrong rolling window response")
+            source_patch = None
+        else:
+            source_patch = _patch(nav["patch"])
+            for expected in (expected_patch, requested_patch, canonical_patch):
+                if expected is not None and _patch(expected) != source_patch:
+                    raise _error("wrong patch response")
         catalog_raw = graph.one({"patch", "champions", "champPath", "augments", "items"})
-        if _patch(graph.read(catalog_raw["patch"])) != source_patch:
+        asset_patch = graph.read(catalog_raw["patch"])
+        normalized_asset_patch = _patch(asset_patch)
+        if window == "current" and normalized_asset_patch != source_patch:
             raise _error("catalog patch mismatch")
         paths = graph.read(catalog_raw["champPath"])
         if (not isinstance(paths, dict) or paths.get(str(champion["id"])) != path.split("/")[2]):
@@ -343,11 +366,18 @@ def parse_champion(html, champion, url, augment_catalog, *, expected_patch=None)
                 items.append({"id": ident, "name": name, "icon_url": icon_url, "description": "",
                               "category": category, "win_rate": rate, "sample_count": samples,
                               "low_sample": samples < 200})
+        data_patch = nav["patch"] if window == "current" else None
+        rate_note = "Source win rate; finish cutoff not specified. Items and prismatic selections are individual observations, not full builds."
+        sample_label = "Arena · all ranks · all regions · queue unspecified"
+        if window == "30":
+            rate_note += " Last 30 days is a rolling sample that can span balance patches; exact match dates are not published."
+            sample_label += " · last 30 days"
         return {"source": "Lolalytics", "source_url": url, "game_mode": "Arena",
-                "version": nav["patch"], "source_patch": nav["patch"], "data_date": None,
+                "version": data_patch, "source_patch": data_patch, "data_date": None,
+                "data_window": window, "asset_patch": asset_patch,
+                **({"window_days": 30} if window == "30" else {}),
                 "stale": False, "win_rate_label": "Win rate",
-                "rate_note": "Source win rate; finish cutoff not specified. Items and prismatic selections are individual observations, not full builds.",
-                "sample_label": "Arena · all ranks · all regions · queue unspecified",
+                "rate_note": rate_note, "sample_label": sample_label,
                 "champion_id": str(champion["id"]), "champion_name": champion["name"],
                 "summary": summary, "augments": augments, "items": items}
     except DataUnavailableError:

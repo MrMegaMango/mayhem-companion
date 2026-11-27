@@ -8,6 +8,7 @@ from mayhem.data import DataUnavailableError
 CHAMPION = {"id": "39", "name": "Irelia", "raw_name": "Irelia"}
 URL = "https://lolalytics.com/lol/irelia/arena/build/?tier=all&patch=16.21"
 CANONICAL = "https://lolalytics.com/lol/irelia/arena/build/?tier=all"
+ROLLING_URL = CANONICAL + "&patch=30"
 REFERENCE = {"9001": {"id": "9001", "name": "Mystic Punch"},
              "58": {"id": "58", "name": "Other Augment"}}
 
@@ -92,6 +93,10 @@ class LolalyticsArenaTests(unittest.TestCase):
         result = self.parse(expected_patch="26.21")
         self.assertEqual(result["source"], "Lolalytics")
         self.assertEqual(result["version"], "16.21")
+        self.assertEqual(result["source_patch"], "16.21")
+        self.assertEqual(result["asset_patch"], "16.21")
+        self.assertEqual(result["data_window"], "current")
+        self.assertNotIn("window_days", result)
         self.assertEqual(result["champion_id"], "39")
         self.assertEqual(result["summary"]["sample_count"], 21871)
         self.assertAlmostEqual(result["summary"]["win_rate"], .4815)
@@ -284,6 +289,86 @@ class LolalyticsArenaTests(unittest.TestCase):
                 reference["1344"]["rarity"] = "unknown"
             with self.subTest(change=change):
                 self.assertEqual([row["id"] for row in self.parse(page(data), reference=reference)["augments"]], ["58"])
+
+    def parse_rolling(self, data=None, *, url=ROLLING_URL, canonical=ROLLING_URL, **kwargs):
+        if data is None:
+            data = fixture()
+            data["navigation"]["patch"] = "30"
+        return parse_champion(page(data, canonical=canonical), CHAMPION, url,
+                              REFERENCE, window="30", **kwargs)
+
+    def test_rolling_window_keeps_sample_separate_from_asset_patch(self):
+        result = self.parse_rolling(expected_patch="26.23")
+        self.assertEqual(result["source_url"], ROLLING_URL)
+        self.assertEqual(result["data_window"], "30")
+        self.assertEqual(result["window_days"], 30)
+        self.assertIsNone(result["version"])
+        self.assertIsNone(result["source_patch"])
+        self.assertIsNone(result["data_date"])
+        self.assertEqual(result["asset_patch"], "16.21")
+        self.assertEqual(result["summary"]["sample_count"], 21871)
+        self.assertEqual(result["augments"][0]["sample_count"], 4158)
+        self.assertAlmostEqual(result["augments"][0]["win_rate"], .6104)
+        self.assertIn("all ranks", result["sample_label"])
+        self.assertIn("all regions", result["sample_label"])
+        self.assertIn("last 30 days", result["sample_label"])
+        self.assertIn("span balance patches", result["rate_note"])
+        self.assertIn("exact match dates are not published", result["rate_note"])
+
+    def test_rolling_window_requires_matching_request_and_canonical(self):
+        for url in (URL, CANONICAL, ROLLING_URL.replace("patch=30", "patch=7"),
+                    ROLLING_URL + "&patch=30", ROLLING_URL + "&region=na",
+                    ROLLING_URL.replace("tier=all", "tier=emerald_plus")):
+            with self.subTest(url=url), self.assertRaises(DataUnavailableError):
+                self.parse_rolling(url=url)
+        for canonical in (URL, CANONICAL, ROLLING_URL.replace("patch=30", "patch=7"),
+                          ROLLING_URL.replace("irelia", "yasuo"),
+                          ROLLING_URL.replace("lolalytics.com", "evil.invalid")):
+            with self.subTest(canonical=canonical), self.assertRaises(DataUnavailableError):
+                self.parse_rolling(canonical=canonical)
+
+    def test_rolling_window_rejects_wrong_response_window(self):
+        for patch in ("16.21", "7", "14", 30, None):
+            data = fixture()
+            data["navigation"]["patch"] = patch
+            with self.subTest(patch=patch), self.assertRaises(DataUnavailableError):
+                self.parse_rolling(data)
+
+    def test_rolling_window_keeps_mode_champion_and_filter_checks(self):
+        for key, value in (("cid", 157), ("champName", "Yasuo"), ("mode", "aram"),
+                           ("page", "build"), ("tier", "emerald_plus"), ("region", "na")):
+            data = fixture()
+            data["navigation"].update(patch="30")
+            data["navigation"][key] = value
+            with self.subTest(key=key), self.assertRaises(DataUnavailableError):
+                self.parse_rolling(data)
+
+    def test_rolling_catalog_still_requires_a_real_asset_patch(self):
+        for patch in ("30", "16.21.1", "unknown", None):
+            data = fixture()
+            data["navigation"]["patch"] = "30"
+            data["catalog"]["patch"] = patch
+            with self.subTest(patch=patch), self.assertRaises(DataUnavailableError):
+                self.parse_rolling(data)
+
+    def test_current_window_cannot_accept_rolling_response(self):
+        data = fixture()
+        data["navigation"]["patch"] = "30"
+        with self.assertRaises(DataUnavailableError):
+            self.parse(page(data))
+        with self.assertRaises(DataUnavailableError):
+            parse_champion(page(data, canonical=ROLLING_URL), CHAMPION, ROLLING_URL,
+                           REFERENCE)
+
+    def test_window_urls_and_unsupported_windows(self):
+        self.assertEqual(champion_url(CHAMPION, "26.23", window="30"), ROLLING_URL)
+        self.assertEqual(champion_url(CHAMPION, "26.21", window="current"), URL)
+        for window in ("7", "14", "all", "", 30, None):
+            with self.subTest(window=window):
+                with self.assertRaises(DataUnavailableError):
+                    champion_url(CHAMPION, "26.21", window=window)
+                with self.assertRaises(DataUnavailableError):
+                    parse_champion(page(), CHAMPION, URL, REFERENCE, window=window)
 
     def test_champion_url_handles_internal_patch_and_verified_special_routes(self):
         self.assertEqual(champion_url(CHAMPION, "26.21"), URL)
