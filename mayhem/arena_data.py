@@ -1,4 +1,4 @@
-"""On-demand Arena statistics with a champion-specific Lolalytics fallback.
+"""On-demand Arena statistics selected by champion-specific source coverage.
 
 The source's own ``Win Rate`` label is preserved: it does not define its finish
 cutoff on these pages. Items are individual observations, never joint builds.
@@ -345,6 +345,47 @@ def parse_champion(html, champion, url):
             "summary": summary, **categories}
 
 
+def _coverage(snapshot):
+    """Compare supported observations, never the size of their win rates."""
+    def counts(kind):
+        samples = [row["sample_count"] for row in snapshot.get(kind, [])
+                   if type(row.get("sample_count")) is int and row["sample_count"] > 0
+                   and type(row.get("win_rate")) in (int, float)
+                   and math.isfinite(row["win_rate"]) and 0 <= row["win_rate"] <= 1]
+        # Capping support prevents one popular choice from outweighing breadth.
+        return sum(n >= 200 for n in samples), len(samples), sum(min(n, 2000) for n in samples)
+
+    augments, items = counts("augments"), counts("items")
+    games = snapshot.get("summary", {}).get("sample_count", 0)
+    games = games if type(games) is int and games > 0 else 0
+    return (bool(augments[1]) + bool(items[1]), augments[0], augments[1],
+            items[0], items[1], augments[2], items[2], games)
+
+
+def _preferred_snapshot(primary, alternative):
+    """Keep one source intact; only compare coverage within the same patch."""
+    if alternative is None:
+        return primary
+    from .arena_lolalytics import _patch
+    # Both parsers validate patch identities; normalize Riot's internal 16.x and
+    # public 26.x names. Large older samples must never displace a newer patch.
+    primary_patch, alternative_patch = _patch(primary["version"]), _patch(alternative["version"])
+    if primary_patch != alternative_patch:
+        return alternative if alternative_patch > primary_patch else primary
+    primary_coverage, alternative_coverage = _coverage(primary), _coverage(alternative)
+    if not alternative_coverage[0]:
+        return primary
+    if not primary_coverage[0]:
+        return alternative
+    if bool(primary.get("stale")) != bool(alternative.get("stale")):
+        return alternative if primary.get("stale") else primary
+
+    # An alternative must not remove an entire working view on the same patch.
+    if any(primary_coverage[i] and not alternative_coverage[i] for i in (2, 4)):
+        return primary
+    return alternative if alternative_coverage > primary_coverage else primary
+
+
 class ArenaProvider:
     """One-thread owner; bounded downloads, one-hour snapshots and short retries."""
     def __init__(self, cache_dir):
@@ -490,11 +531,11 @@ class ArenaProvider:
             if fallback is not None:
                 return fallback
             raise
-        if not data.get("augments"):
-            fallback = self._fallback_champion(champion, catalog, force=force)
-            if fallback is not None and (fallback.get("augments") or not data.get("items")):
-                return fallback
-        return data
+        # A nonempty primary page can still represent only a handful of games.
+        # Both URLs retain their existing hour cache and failure retry backoff;
+        # comparison adds no downloads during warm lookups or game polling.
+        alternative = self._fallback_champion(champion, catalog, force=force)
+        return _preferred_snapshot(data, alternative)
 
     def _fallback_champion(self, champion, catalog, *, force=False):
         # A complete snapshot keeps each row and its metadata on one source.

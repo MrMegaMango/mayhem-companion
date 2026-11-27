@@ -19,6 +19,7 @@ DDRAGON = {"data": {
 }}
 NAMES = _ddragon(DDRAGON)
 URL = INDEX_URL + "/yasuo"
+ALTERNATIVE_URL = "https://lolalytics.com/lol/yasuo/arena/build/?tier=all&patch=16.21"
 
 
 def page(body, url=INDEX_URL, version="26.21"):
@@ -59,6 +60,17 @@ def detail_html(augments=None, items=None):
     return page('<h1>Yasuo</h1>' + summary +
                 '<div class="ar-augs ar-augs--focus"><h2>Augments taken with Yasuo</h2>' + augments + '</div>'
                 '<div class="ar-augs ar-augs--focus"><h2>Items taken with Yasuo</h2>' + items + '</div>', URL)
+
+
+def alternative_snapshot(*, augment_samples=(2000,), item_samples=(3000,), version="16.21", stale=False):
+    return {"source": "Lolalytics", "source_url": ALTERNATIVE_URL, "version": version,
+            "champion_id": "157", "champion_name": "Yasuo", "stale": stale,
+            "sample_label": "Arena · all ranks · all regions · queue unspecified",
+            "summary": {"sample_count": 20000},
+            "augments": [{"id": str(43 + i), "win_rate": .61, "sample_count": samples}
+                         for i, samples in enumerate(augment_samples)],
+            "items": [{"id": str(223031 + i), "win_rate": .52, "sample_count": samples}
+                      for i, samples in enumerate(item_samples)]}
 
 
 class ArenaParsingTests(unittest.TestCase):
@@ -200,7 +212,8 @@ class ArenaProviderTests(unittest.TestCase):
         with patch.object(self.provider, "_download", side_effect=self.download):
             self.provider.champion_for("157")
         restarted = ArenaProvider(Path(self.temp.name))
-        with patch.object(restarted, "_download", side_effect=AssertionError("unexpected download")):
+        with patch.object(restarted, "_fallback_champion", return_value=None), \
+                patch.object(restarted, "_download", side_effect=AssertionError("unexpected download")):
             self.assertEqual(restarted.champion_for("157")["augments"][0]["win_rate"], .75)
 
     def test_transient_fallback_keeps_whole_original_champion_snapshot(self):
@@ -311,10 +324,7 @@ class ArenaProviderTests(unittest.TestCase):
 
     def test_empty_augments_uses_whole_fallback_snapshot(self):
         self.payloads[URL] = detail_html(augments="")
-        snapshot = {"source": "Lolalytics", "version": "16.21", "champion_id": "157",
-                    "summary": {"sample_count": 20000},
-                    "augments": [{"id": "43", "win_rate": .61, "sample_count": 2000}],
-                    "items": [{"id": "223031", "win_rate": .52, "sample_count": 3000}]}
+        snapshot = alternative_snapshot()
         self.fallback.return_value = snapshot
         with patch.object(self.provider, "_download", side_effect=self.download):
             result = self.provider.champion_for("157", force=True)
@@ -325,23 +335,182 @@ class ArenaProviderTests(unittest.TestCase):
 
     def test_primary_failure_uses_available_champion_fallback(self):
         self.payloads[URL] = DataUnavailableError("offline", transient=True)
-        snapshot = {"source": "Lolalytics", "champion_id": "157", "augments": [{"id": "43"}]}
+        snapshot = alternative_snapshot()
         self.fallback.return_value = snapshot
         with patch.object(self.provider, "_download", side_effect=self.download):
             self.assertEqual(self.provider.champion_for("157"), snapshot)
 
-    def test_complete_primary_does_not_query_fallback(self):
+    def test_nonempty_primary_still_checks_alternative(self):
         with patch.object(self.provider, "_download", side_effect=self.download):
             self.assertEqual(self.provider.champion_for("157")["source"], "winrate.lol")
-        self.fallback.assert_not_called()
+        self.fallback.assert_called_once()
 
     def test_empty_fallback_does_not_discard_primary_items(self):
         self.payloads[URL] = detail_html(augments="")
-        self.fallback.return_value = {"source": "Lolalytics", "augments": [], "items": []}
+        self.fallback.return_value = alternative_snapshot(augment_samples=(), item_samples=())
         with patch.object(self.provider, "_download", side_effect=self.download):
             result = self.provider.champion_for("157")
         self.assertEqual(result["source"], "winrate.lol")
         self.assertEqual(len(result["items"]), 1)
+
+    def lookup_alternative(self, snapshot, primary=None, *, force=True):
+        self.fallback.return_value = snapshot
+        if primary is not None:
+            self.payloads[URL] = primary
+        with patch.object(self.provider, "_download", side_effect=self.download):
+            return self.provider.champion_for("157", force=force)
+
+    def test_sparse_nonempty_primary_uses_complete_better_covered_snapshot(self):
+        snapshot = alternative_snapshot(augment_samples=(2000, 400), item_samples=(3000, 900))
+        snapshot["items"][0]["id"] = "443090"
+        result = self.lookup_alternative(snapshot)
+        self.assertEqual(result, snapshot)
+        self.assertEqual(result["source_url"], ALTERNATIVE_URL)
+        self.assertNotIn("223031", {row["id"] for row in result["items"]})
+
+    def test_more_supported_augments_outweigh_more_tiny_observations(self):
+        primary = detail_html(augments=observation(count="200"))
+        snapshot = alternative_snapshot(augment_samples=(1,) * 30)
+        self.assertEqual(self.lookup_alternative(snapshot, primary)["source"], "winrate.lol")
+
+    def test_better_covered_primary_is_retained(self):
+        primary = detail_html(augments=observation(count="200") +
+                              observation(ident="44", name="Second augment", count="200"))
+        self.assertEqual(self.lookup_alternative(alternative_snapshot(), primary)["source"], "winrate.lol")
+
+    def test_broader_coverage_wins_when_both_sources_have_small_samples(self):
+        snapshot = alternative_snapshot(augment_samples=(8, 9), item_samples=(12,))
+        self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def test_more_usable_item_data_breaks_equal_augment_coverage(self):
+        snapshot = alternative_snapshot(augment_samples=(12,), item_samples=(200,))
+        self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def test_more_item_choices_break_equal_supported_row_counts(self):
+        snapshot = alternative_snapshot(augment_samples=(12,), item_samples=(8, 9))
+        self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def test_better_sample_support_breaks_equal_coverage(self):
+        for augments, items in (((13,), (12,)), ((12,), (13,))):
+            with self.subTest(augment_samples=augments, item_samples=items):
+                snapshot = alternative_snapshot(augment_samples=augments, item_samples=items)
+                snapshot["summary"]["sample_count"] = 31
+                self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def test_exact_coverage_tie_keeps_primary_regardless_of_win_rates(self):
+        for rate in (0., 1.):
+            with self.subTest(rate=rate):
+                snapshot = alternative_snapshot(augment_samples=(12,), item_samples=(12,))
+                snapshot["summary"]["sample_count"] = 31
+                snapshot["augments"][0]["win_rate"] = rate
+                self.assertEqual(self.lookup_alternative(snapshot)["source"], "winrate.lol")
+
+    def test_one_extremely_popular_row_cannot_dominate_sample_support(self):
+        primary = detail_html(augments=observation(count="2000"))
+        snapshot = alternative_snapshot(augment_samples=(1000000,), item_samples=(12,))
+        snapshot["summary"]["sample_count"] = 31
+        self.assertEqual(self.lookup_alternative(snapshot, primary)["source"], "winrate.lol")
+
+    def test_champion_sample_breaks_otherwise_equal_coverage(self):
+        snapshot = alternative_snapshot(augment_samples=(12,), item_samples=(12,))
+        self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def test_zero_percent_with_real_samples_is_usable(self):
+        snapshot = alternative_snapshot()
+        snapshot["augments"][0]["win_rate"] = 0.
+        self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def test_missing_invalid_or_unobserved_rows_do_not_inflate_coverage(self):
+        for field, value in (("win_rate", None), ("win_rate", float("nan")),
+                             ("win_rate", float("inf")), ("win_rate", -0.1),
+                             ("win_rate", 1.1), ("win_rate", "0.5"), ("win_rate", True),
+                             ("sample_count", 0), ("sample_count", -1)):
+            with self.subTest(field=field, value=value):
+                snapshot = alternative_snapshot(augment_samples=(12, 5000), item_samples=(12,))
+                snapshot["summary"]["sample_count"] = 31
+                snapshot["augments"][1][field] = value
+                self.assertEqual(self.lookup_alternative(snapshot)["source"], "winrate.lol")
+
+    def test_alternative_cannot_erase_an_existing_category_on_same_patch(self):
+        for augments, items in (((5000,) * 20, ()), ((), (5000,) * 20)):
+            with self.subTest(augments=bool(augments)):
+                snapshot = alternative_snapshot(augment_samples=augments, item_samples=items)
+                self.assertEqual(self.lookup_alternative(snapshot)["source"], "winrate.lol")
+
+    def test_newer_patch_wins_without_comparing_sample_counts(self):
+        primary = detail_html(augments=observation(count="5000"),
+                              items=observation("item", "223031", "Infinity Edge", count="5000"))
+        snapshot = alternative_snapshot(augment_samples=(1,), item_samples=(1,), version="16.22")
+        self.assertEqual(self.lookup_alternative(snapshot, primary), snapshot)
+
+    def test_fresh_empty_current_patch_does_not_revive_previous_patch_observations(self):
+        primary = detail_html(augments="", items="").replace("26.21", "26.23")
+        snapshot = alternative_snapshot(augment_samples=(5000,) * 20, version="16.22")
+        result = self.lookup_alternative(snapshot, primary)
+        self.assertEqual(result["source"], "winrate.lol")
+        self.assertEqual(result["version"], "26.23")
+        self.assertEqual(result["augments"], [])
+        self.assertEqual(result["items"], [])
+        self.assertFalse(result["stale"])
+
+    def test_newer_empty_alternative_replaces_older_fresh_primary(self):
+        snapshot = alternative_snapshot(augment_samples=(), item_samples=(), version="16.22")
+        self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def test_older_patch_never_displaces_newer_primary_for_more_samples(self):
+        snapshot = alternative_snapshot(augment_samples=(5000,) * 20, version="16.20")
+        self.assertEqual(self.lookup_alternative(snapshot)["source"], "winrate.lol")
+
+    def test_stale_alternative_does_not_displace_fresh_primary(self):
+        self.assertEqual(self.lookup_alternative(alternative_snapshot(stale=True))["source"], "winrate.lol")
+
+    def test_fresh_alternative_replaces_larger_stale_same_patch_snapshot(self):
+        primary = detail_html(augments=observation(count="5000"))
+        self.lookup_alternative(None, primary)
+        self.now.return_value = 5000.
+        self.payloads[URL] = DataUnavailableError("offline", transient=True)
+        snapshot = alternative_snapshot(augment_samples=(1,), item_samples=(1,))
+        self.assertEqual(self.lookup_alternative(snapshot), snapshot)
+
+    def real_alternative(self):
+        self.fallback_patch.stop()
+        self.payloads[ALTERNATIVE_URL] = "alternative page"
+        snapshot = alternative_snapshot()
+        return patch("mayhem.arena_lolalytics.parse_champion",
+                     side_effect=lambda *args, **kwargs: copy.deepcopy(snapshot))
+
+    def test_real_alternative_lookup_uses_memory_and_disk_cache(self):
+        with self.real_alternative() as parse, \
+                patch.object(self.provider, "_download", side_effect=self.download):
+            first = self.provider.champion_for("157")
+            self.assertEqual(first["source"], "Lolalytics")
+            first["augments"].clear()
+            self.assertEqual(len(self.provider.champion_for("157")["augments"]), 1)
+            self.assertEqual(self.calls, [VERSIONS_URL, self.resource, INDEX_URL, URL, ALTERNATIVE_URL])
+            restarted = ArenaProvider(Path(self.temp.name))
+            with patch.object(restarted, "_download", side_effect=AssertionError("unexpected download")):
+                self.assertEqual(restarted.champion_for("157")["source"], "Lolalytics")
+            self.assertEqual(parse.call_args.kwargs["expected_patch"], "26.21")
+
+    def test_failed_alternative_keeps_primary_and_retries_after_cooldown(self):
+        with self.real_alternative(), patch.object(self.provider, "_download", side_effect=self.download):
+            self.payloads[ALTERNATIVE_URL] = DataUnavailableError("offline", transient=True)
+            self.assertEqual(self.provider.champion_for("157")["source"], "winrate.lol")
+            self.assertEqual(self.provider.champion_for("157")["source"], "winrate.lol")
+            self.assertEqual(self.calls.count(ALTERNATIVE_URL), 1)
+            self.now.return_value = 1061.
+            self.payloads[ALTERNATIVE_URL] = "alternative page"
+            self.assertEqual(self.provider.champion_for("157")["source"], "Lolalytics")
+            self.assertEqual(self.calls.count(ALTERNATIVE_URL), 2)
+
+    def test_force_refresh_bypasses_alternative_error_cooldown(self):
+        with self.real_alternative(), patch.object(self.provider, "_download", side_effect=self.download):
+            self.payloads[ALTERNATIVE_URL] = DataUnavailableError("offline", transient=True)
+            self.assertEqual(self.provider.champion_for("157")["source"], "winrate.lol")
+            self.payloads[ALTERNATIVE_URL] = "alternative page"
+            self.assertEqual(self.provider.champion_for("157", force=True)["source"], "Lolalytics")
+            self.assertEqual(self.calls.count(ALTERNATIVE_URL), 2)
+            self.assertEqual(self.calls.count(URL), 2)
 
     def test_corrupted_cache_refetched_instead_of_used(self):
         with patch.object(self.provider, "_download", side_effect=self.download):
@@ -351,7 +520,8 @@ class ArenaProviderTests(unittest.TestCase):
         self.provider._write(URL, cached)
         restarted = ArenaProvider(Path(self.temp.name))
         self.calls.clear()
-        with patch.object(restarted, "_download", side_effect=self.download):
+        with patch.object(restarted, "_fallback_champion", return_value=None), \
+                patch.object(restarted, "_download", side_effect=self.download):
             restarted.champion_for("157")
         self.assertEqual(self.calls, [URL])
 
